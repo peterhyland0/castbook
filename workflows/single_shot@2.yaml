@@ -1,0 +1,23 @@
+# M1 + pose-aware judge: same keyframe and clip steps as @1 (so their cached artifacts are reused);
+# the judge skips frames turned past max_yaw and samples twice as densely.
+# Immutable once used in a run: change a parameter by adding single_shot@3.yaml.
+id: single_shot
+version: 2
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true        # 4-step distilled LoRA; false = 40 steps with true CFG
+      width: 1248            # 16:9, downscaled to the clip size before animating
+      height: 720
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true        # 4-step distilled LoRA on both experts
+      width: 832
+      height: 480
+      num_frames: 81         # 5 s at 16 fps
+      fps: 16
+  judge:
+    sample_every: 4          # score every 4th frame
+    max_yaw: 45              # degrees; frames turned further are counted as profile, not scored

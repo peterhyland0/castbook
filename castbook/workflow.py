@@ -14,6 +14,7 @@ class StepConfig(BaseModel):
     model: str | None = None
     params: dict[str, Any] = {}
     sample_every: int | None = None
+    max_yaw: float | None = None
 
 
 class Workflow(BaseModel):

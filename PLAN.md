@@ -224,7 +224,8 @@ castbook/
 **M1: Single shot end to end (2–3 days)**
 - [x] `KeyframeWorker` + `VideoWorker` as `@app.cls` with `@modal.enter` loading
 - [x] `JudgeWorker`: ArcFace per sampled frame vs the character embedding → min / p10 / mean
-- [ ] Make the judge pose-aware: skip or down-weight frames past ~45° yaw and report a profile rate. The first run showed profile frames scoring ~0.02 for the right person.
+- [x] Make the judge pose-aware: skip frames past 45° yaw and report a profile rate (`single_shot@2`; clip min 0.01 → 0.61 on the same cached clip)
+- [ ] Gate verdicts: pass / fail / *unverifiable* (frontal coverage below a floor) plus a face-occlusion check. The pose-aware rerun scored only 5 of 21 frames, and similarity fell at constant yaw when a hand covered the face.
 - [x] One shot: portrait + prompt → keyframe → 5 s clip → identity score
 - [x] Log GPU-seconds and $ per step (first run: $0.34, of which $0.025 is warm clip inference; see README)
 

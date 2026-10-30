@@ -58,3 +58,15 @@ def test_index_lists_runs(tmp_path):
     _run_dir(tmp_path, "r2")
     page = render_index(tmp_path).read_text()
     assert 'href="r1/index.html"' in page and 'href="r2/index.html"' in page
+
+
+def test_profile_frames_get_a_band_and_grey_marker():
+    per_frame = [
+        {"frame": 0, "sim": 0.7, "yaw": 5.0, "profile": False},
+        {"frame": 40, "sim": 0.05, "yaw": 70.0, "profile": True},
+        {"frame": 80, "sim": 0.6, "yaw": 10.0, "profile": False},
+    ]
+    svg = identity_chart_svg(per_frame, 81, 0.8)
+    assert 'fill="var(--band)"' in svg
+    assert "profile · not scored" in svg
+    assert svg.count('fill="var(--text-muted)"') == 1

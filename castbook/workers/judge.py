@@ -1,7 +1,9 @@
 """Identity judge: ArcFace (InsightFace buffalo_l) on CPU.
 
 Detection plus a 512-d embedding per face. For each image or sampled frame we
-keep the largest face, which is the subject in a single-character shot.
+keep the largest face, which is the subject in a single-character shot. The
+buffalo_l pack also estimates head pose (pitch, yaw, roll in degrees) from its
+3D landmark model; yaw is what decides whether a frame is a profile.
 """
 
 import io
@@ -10,7 +12,7 @@ import time
 
 import modal
 
-from castbook.identity import score_frames
+from castbook.identity import is_profile, score_frames
 from castbook.workers.common import MODELS_DIR, TimedWorker, app, judge_image, models_vol
 
 
@@ -38,9 +40,11 @@ class Judge(TimedWorker):
 
         faces = self.fa.get(np.ascontiguousarray(rgb[:, :, ::-1]))  # InsightFace expects BGR
         if not faces:
-            return None, 0
+            return None, None, 0
         f = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-        return f.normed_embedding, len(faces)
+        pose = getattr(f, "pose", None)
+        yaw = None if pose is None else float(pose[1])
+        return f.normed_embedding, yaw, len(faces)
 
     def _embed_bytes(self, data: bytes):
         import numpy as np
@@ -51,24 +55,32 @@ class Judge(TimedWorker):
     @modal.method()
     def embed(self, image: bytes) -> dict:
         t0 = time.perf_counter()
-        emb, n_faces = self._embed_bytes(image)
+        emb, yaw, n_faces = self._embed_bytes(image)
         return {
             "embedding": None if emb is None else emb.tolist(),
+            "yaw": yaw,
             "n_faces": n_faces,
             "timing": self._timing(time.perf_counter() - t0),
         }
 
     @modal.method()
-    def score_image(self, reference: list[float], image: bytes) -> dict:
+    def score_image(self, reference: list[float], image: bytes, max_yaw: float | None = None) -> dict:
         import numpy as np
 
         t0 = time.perf_counter()
-        emb, n_faces = self._embed_bytes(image)
-        score = score_frames(np.array(reference), [emb])
-        return {"score": score.to_dict(), "n_faces": n_faces, "timing": self._timing(time.perf_counter() - t0)}
+        emb, yaw, n_faces = self._embed_bytes(image)
+        score = score_frames(np.array(reference), [emb], [yaw], max_yaw)
+        return {
+            "score": score.to_dict(),
+            "yaw": yaw,
+            "n_faces": n_faces,
+            "timing": self._timing(time.perf_counter() - t0),
+        }
 
     @modal.method()
-    def score_video(self, reference: list[float], video: bytes, sample_every: int = 8) -> dict:
+    def score_video(
+        self, reference: list[float], video: bytes, sample_every: int = 8, max_yaw: float | None = None
+    ) -> dict:
         import imageio.v3 as iio
         import numpy as np
 
@@ -82,11 +94,18 @@ class Judge(TimedWorker):
         sampled = list(range(0, len(frames), sample_every))
         if sampled[-1] != len(frames) - 1:
             sampled.append(len(frames) - 1)  # always judge the last frame: the next shot starts there
-        embs = [self._embed_rgb(frames[i])[0] for i in sampled]
+        detections = [self._embed_rgb(frames[i]) for i in sampled]
+        embs = [d[0] for d in detections]
+        yaws = [d[1] for d in detections]
         ref = np.array(reference)
         per_frame = [
-            {"frame": i, "sim": None if e is None else round(cosine(ref, e), 4)}
-            for i, e in zip(sampled, embs, strict=True)
+            {
+                "frame": i,
+                "sim": None if e is None else round(cosine(ref, e), 4),
+                "yaw": None if y is None else round(y, 1),
+                "profile": is_profile(y, max_yaw) if e is not None else False,
+            }
+            for i, e, y in zip(sampled, embs, yaws, strict=True)
         ]
-        score = score_frames(ref, embs)
+        score = score_frames(ref, embs, yaws, max_yaw)
         return {"score": score.to_dict(), "per_frame": per_frame, "timing": self._timing(time.perf_counter() - t0)}

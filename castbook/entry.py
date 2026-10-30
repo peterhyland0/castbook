@@ -52,7 +52,7 @@ def shot(
         "The person turns their head slowly toward the window and smiles softly, rain running "
         "down the glass, gentle camera push-in, cinematic lighting."
     ),
-    workflow: str = "single_shot@1",
+    workflow: str = "single_shot@2",
     seed: int = 7,
 ):
     r = single_shot.remote(character, keyframe_prompt, motion_prompt, workflow, seed)

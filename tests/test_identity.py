@@ -39,3 +39,29 @@ def test_score_frames_with_no_faces():
 def test_zero_embedding_rejected():
     with pytest.raises(ValueError):
         cosine(np.zeros(3), _unit(1, 0, 0))
+
+
+def test_profile_frames_are_counted_but_not_scored():
+    ref = _unit(1, 0)
+    frames = [_unit(1, 0), _unit(1, 0.2), _unit(0, 1), None]
+    yaws = [5.0, -30.0, 80.0, None]
+    s = score_frames(ref, frames, yaws, max_yaw=45)
+    assert s.n_scored == 2
+    assert s.profile_rate == pytest.approx(0.25)
+    assert s.face_rate == pytest.approx(0.75)
+    assert s.min > 0.9  # the 80° frame (cosine 0) no longer drags the minimum down
+
+
+def test_without_max_yaw_every_face_is_scored():
+    s = score_frames(_unit(1, 0), [_unit(1, 0), _unit(0, 1)], [0.0, 80.0])
+    assert s.n_scored == 2 and s.profile_rate == 0.0 and s.min == pytest.approx(0.0)
+
+
+def test_all_profile_is_unscorable_not_zero():
+    s = score_frames(_unit(1, 0), [_unit(0, 1)], [-70.0], max_yaw=45)
+    assert s.n_scored == 0 and s.mean is None and s.profile_rate == 1.0
+
+
+def test_yaws_must_align():
+    with pytest.raises(ValueError):
+        score_frames(_unit(1, 0), [_unit(1, 0)], [0.0, 1.0])

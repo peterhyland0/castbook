@@ -22,10 +22,31 @@ The plan and motivation are in [PLAN.md](PLAN.md); the background research is in
 | **total** | | | | **$0.34** (340 s wall) |
 
 - **Identity:** keyframe vs portrait ArcFace 0.76. The clip scores 0.71 on frame 0, falls to 0.44 by frame 32 and to 0.01–0.05 from frame 56 on.
-- **The falloff is head pose, not identity drift.** The motion prompt turns her toward the window, so later frames are near-profile, and ArcFace similarity collapses on profiles even for the right person. The gate must be pose-aware before it can re-roll anything: use InsightFace's yaw estimate to skip or down-weight frames past about 45°, and report a profile rate.
+- **The falloff is mostly head pose, not identity drift.** The motion prompt turns her toward the window, so later frames are near-profile, and ArcFace similarity collapses on profiles even for the right person.
 - **Warm cost per clip is about $0.025.** That's 22.4 s on an H100, against Mage's listed Wan 2.2 Fast at 45 Gems / ~23 s. Inference speed is already at parity.
 - **The cost is the cold start.** Wan's fp32 weights take 227 s to load and cast. Re-saving the weights in bf16 plus memory snapshots (M4) is the obvious first win.
 - **Visible artifact:** a hand-raise gesture appears that wasn't in the prompt. The 4-step distilled model trades motion control for speed, which is something the full-step A/B arm should show.
+
+## Pose-aware judge (`single_shot@2`, run `20261030T022427-2e8cae`)
+
+Workflow @2 changes only the judge: it samples every 4th frame and treats frames turned more than 45° (InsightFace
+yaw) as *profile*, which are counted but left out of the score. The keyframe and clip steps are unchanged, so their
+content-addressed keys match @1. The rerun was a cache hit on both: **$0 GPU, 15 s wall**, CPU judge only.
+
+| | @1 (all frames) | @2 (frames within ±45°) |
+|---|---|---|
+| Clip identity mean | 0.33 | **0.67** |
+| Clip identity min | 0.01 | **0.61** |
+| Frames scored | 11 / 11 | 5 / 21 |
+| Profile rate | — | 76% |
+
+- **Yaw is sane:** 21° on frame 0 (she's already angled in the keyframe), about 88° from frame 28 on.
+- **Pose isn't the whole story.** Between frames 36 and 56 the yaw holds at about 88° while similarity falls from
+  0.37 to 0.02. That's where her hand comes up near her face, so occlusion matters too; a face-visibility check
+  belongs next to the yaw check.
+- **76% of this clip can't be vouched for.** The gate needs three verdicts, not two: *pass*, *fail* and
+  *unverifiable* (too little frontal coverage). "Unverifiable" should trigger a cheap fallback, such as a re-prompt
+  with less head turn or a check from a second angle, not a re-roll.
 
 ## Layout
 

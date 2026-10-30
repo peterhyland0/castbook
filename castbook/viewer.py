@@ -26,13 +26,13 @@ CSS = """
 :root {
   --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #e3e2dd;
   --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77766f;
-  --grid: #ebeae6; --series-1: #2a78d6; --ref: #77766f;
+  --grid: #ebeae6; --series-1: #2a78d6; --ref: #77766f; --band: #efeee9;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #96958c;
-    --grid: #262624; --series-1: #3987e5; --ref: #96958c;
+    --grid: #262624; --series-1: #3987e5; --ref: #96958c; --band: #252523;
   }
 }
 * { box-sizing: border-box; }
@@ -95,9 +95,26 @@ def identity_chart_svg(per_frame: list[dict], n_frames: int, keyframe_sim: float
     """Per-frame ArcFace similarity as a single 2px line with markers.
 
     Frames with no detected face break the line and get a hollow marker on the
-    baseline, so a missing face never reads as a score of zero.
+    baseline, so a missing face never reads as a score of zero. Profile frames
+    (turned past the judge's max_yaw) sit in a shaded band with grey markers:
+    their raw similarity is still drawn, but it is not part of the score.
     """
     parts = [f'<svg class="chart" viewBox="0 0 {W} {H}" role="img" aria-label="Identity similarity per frame">']
+    frames = [p["frame"] for p in per_frame]
+    for i, p in enumerate(per_frame):
+        if not p.get("profile"):
+            continue
+        lo = (frames[i - 1] + p["frame"]) / 2 if i > 0 else p["frame"]
+        hi = (frames[i + 1] + p["frame"]) / 2 if i + 1 < len(frames) else p["frame"]
+        x0, x1 = _x(lo, n_frames), _x(hi, n_frames)
+        parts.append(
+            f'<rect x="{x0:.1f}" y="{PAD_T}" width="{x1 - x0:.1f}" height="{H - PAD_T - PAD_B}" fill="var(--band)"/>'
+        )
+    first_profile = next((p for p in per_frame if p.get("profile")), None)
+    if first_profile is not None:
+        parts.append(
+            f'<text x="{_x(first_profile["frame"], n_frames) + 4:.1f}" y="{PAD_T + 12}">profile · not scored</text>'
+        )
     for t in (0.0, 0.25, 0.5, 0.75, 1.0):
         y = _y(t)
         parts.append(f'<line x1="{PAD_L}" x2="{W - PAD_R}" y1="{y:.1f}" y2="{y:.1f}" stroke="var(--grid)"/>')
@@ -138,8 +155,9 @@ def identity_chart_svg(per_frame: list[dict], n_frames: int, keyframe_sim: float
                 f'stroke-width="1.5"/>'
             )
         else:
+            fill = "var(--text-muted)" if p.get("profile") else "var(--series-1)"
             parts.append(
-                f'<circle cx="{x:.1f}" cy="{_y(p["sim"]):.1f}" r="4" fill="var(--series-1)" '
+                f'<circle cx="{x:.1f}" cy="{_y(p["sim"]):.1f}" r="4" fill="{fill}" '
                 f'stroke="var(--surface-1)" stroke-width="2"/>'
             )
     parts.append(
@@ -199,8 +217,23 @@ def render_run(run_dir: Path) -> Path:
     prompts = record.get("prompts", {})
     frame_rows = "".join(
         f'<tr><td class="num">{p["frame"]}</td><td class="num">{p["frame"] / fps:.2f}</td>'
-        f'<td class="num">{"no face" if p["sim"] is None else f"{p['sim']:.3f}"}</td></tr>'
+        f'<td class="num">{"no face" if p["sim"] is None else f"{p['sim']:.3f}"}</td>'
+        f'<td class="num">{_fmt(p.get("yaw"), 0)}</td>'
+        f"<td>{'no face' if p['sim'] is None else ('profile, not scored' if p.get('profile') else 'scored')}</td></tr>"
         for p in per_frame
+    )
+    pose_aware = clip.get("max_yaw") is not None
+    clip_label = (
+        f"Clip identity (frames within ±{clip['max_yaw']:.0f}°)" if pose_aware else "Clip identity (all frames)"
+    )
+    clip_sub = f"min {_fmt(clip['min'])} · p10 {_fmt(clip['p10'])} · faces {clip['face_rate']:.0%}"
+    if pose_aware:
+        clip_sub += f" · profile {clip['profile_rate']:.0%} · scored {clip['n_scored']}/{clip['n_frames']}"
+    hint = (
+        f"Shaded frames are turned more than {clip['max_yaw']:.0f}° from the camera; they are counted as profile "
+        "and left out of the score, because ArcFace similarity collapses on profiles even for the right person."
+        if pose_aware
+        else "This run predates the pose-aware judge: turned-away frames score low even when the identity is right."
     )
     data = json.dumps(
         {"fps": fps, "n_frames": n_frames, "per_frame": per_frame, "W": W, "PAD_L": PAD_L, "PAD_R": PAD_R}
@@ -217,13 +250,13 @@ def render_run(run_dir: Path) -> Path:
 <div class="stats">
   <div class="stat"><div class="label">Keyframe identity</div><div class="value">{_fmt(kf["mean"])}</div>
     <div class="sub">ArcFace cosine vs portrait</div></div>
-  <div class="stat"><div class="label">Clip identity (mean)</div><div class="value">{_fmt(clip["mean"])}</div>
-    <div class="sub">min {_fmt(clip["min"])} · p10 {_fmt(clip["p10"])} · faces {clip["face_rate"]:.0%}</div></div>
+  <div class="stat"><div class="label">{clip_label}</div><div class="value">{_fmt(clip["mean"])}</div>
+    <div class="sub">{clip_sub}</div></div>
   <div class="stat"><div class="label">GPU cost this run</div><div class="value">${record["gpu_usd"]:.2f}</div>
     <div class="sub">includes cold-start loads</div></div>
   <div class="stat"><div class="label">Warm clip cost</div>
     <div class="value">{"—" if warm_usd is None else f"${warm_usd:.3f}"}</div>
-    <div class="sub">{"—" if warm_clip is None else f"{warm_clip:.1f} s inference on H100"}</div></div>
+    <div class="sub">{("cache hit, clip reused" if clip_step.get("cache") == "hit" else "—") if warm_clip is None else f"{warm_clip:.1f} s inference on H100"}</div></div>
 </div>
 
 <div class="card media">
@@ -240,10 +273,9 @@ def render_run(run_dir: Path) -> Path:
   <h2>Identity per frame</h2>
   <div class="chart-wrap">{identity_chart_svg(per_frame, n_frames, kf["mean"])}<div class="tooltip" id="tip"></div></div>
   <p class="hint">Hover for values; click to jump the clip to that frame. Hollow markers on the baseline are
-  frames with no detected face. Scores are not pose-aware yet: turned-away frames score low even when the
-  identity is right.</p>
+  frames with no detected face. {hint}</p>
   <details><summary>Table view</summary>
-    <table><thead><tr><th class="num">Frame</th><th class="num">Time (s)</th><th class="num">Similarity</th></tr></thead>
+    <table><thead><tr><th class="num">Frame</th><th class="num">Time (s)</th><th class="num">Similarity</th><th class="num">Yaw °</th><th>Status</th></tr></thead>
     <tbody>{frame_rows}</tbody></table></details>
 </div>
 
@@ -274,7 +306,8 @@ hit.addEventListener("mousemove", e => {{
   const p = nearest(toFrame(e)), x = xOf(p.frame);
   cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
   tip.innerHTML = `<b>frame ${{p.frame}}</b> · ${{(p.frame / D.fps).toFixed(2)}} s<br>` +
-    (p.sim === null ? "no face detected" : `similarity ${{p.sim.toFixed(3)}}`);
+    (p.sim === null ? "no face detected" : `similarity ${{p.sim.toFixed(3)}}`) +
+    (p.yaw == null ? "" : `<br>yaw ${{p.yaw.toFixed(0)}}°${{p.profile ? " · profile, not scored" : ""}}`);
   const box = svg.getBoundingClientRect(), wrap = svg.parentElement.getBoundingClientRect();
   const px = (x / D.W) * box.width;
   tip.style.display = "block";
@@ -306,7 +339,9 @@ def render_index(runs_dir: Path = RUNS_DIR) -> Path:
             f'<tr><td><a href="{d.name}/index.html">{r["run_id"]}</a></td><td>{html.escape(r["character"])}</td>'
             f"<td>{html.escape(r['workflow'])}</td>"
             f'<td class="num">{_fmt(ident["keyframe"]["mean"])}</td><td class="num">{_fmt(ident["clip"]["mean"])}</td>'
-            f'<td class="num">{_fmt(ident["clip"]["min"])}</td><td class="num">${r["gpu_usd"]:.2f}</td>'
+            f'<td class="num">{_fmt(ident["clip"]["min"])}</td>'
+            f'<td class="num">{"—" if ident["clip"].get("max_yaw") is None else f"{ident['clip']['profile_rate']:.0%}"}</td>'
+            f'<td class="num">${r["gpu_usd"]:.2f}</td>'
             f'<td class="num">{r["wall_s"]:.0f}</td></tr>'
         )
     page = f"""<!doctype html>
@@ -314,7 +349,7 @@ def render_index(runs_dir: Path = RUNS_DIR) -> Path:
 <title>Castbook runs</title><style>{CSS}</style></head>
 <body><main><h1>Castbook runs</h1><p class="meta">{len(rows)} run(s) in <code>{runs_dir}</code></p>
 <div class="card"><table><thead><tr><th>Run</th><th>Character</th><th>Workflow</th>
-<th class="num">Keyframe ID</th><th class="num">Clip ID mean</th><th class="num">Clip ID min</th>
+<th class="num">Keyframe ID</th><th class="num">Clip ID mean</th><th class="num">Clip ID min</th><th class="num">Profile</th>
 <th class="num">GPU $</th><th class="num">Wall s</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
 </main></body></html>
 """

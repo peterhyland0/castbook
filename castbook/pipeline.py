@@ -104,7 +104,7 @@ def single_shot(
     character_id: str,
     keyframe_prompt: str,
     motion_prompt: str,
-    workflow_ref: str = "single_shot@1",
+    workflow_ref: str = "single_shot@2",
     seed: int = 7,
 ) -> dict:
     """Portrait -> keyframe -> clip, with identity scores and per-step cost."""
@@ -138,7 +138,7 @@ def single_shot(
     keyframe: Artifact = runner.run(
         "keyframe", kf_cfg.model, kf_params, [golden["sha256"]], seed, "keyframe.png", compute_keyframe
     )
-    kf_score = judge.score_image.remote(reference, keyframe.data)
+    kf_score = judge.score_image.remote(reference, keyframe.data, wf.steps["judge"].max_yaw)
 
     clip_cfg = wf.steps["clip"]
     clip_params = {**clip_cfg.params, "prompt": motion_prompt}
@@ -158,7 +158,8 @@ def single_shot(
         return r["mp4"], {"timings": [r["timing"]], "n_frames": r["n_frames"]}
 
     clip = runner.run("clip", clip_cfg.model, clip_params, [keyframe.key], seed, "clip.mp4", compute_clip)
-    clip_score = judge.score_video.remote(reference, clip.data, wf.steps["judge"].sample_every or 8)
+    judge_cfg = wf.steps["judge"]
+    clip_score = judge.score_video.remote(reference, clip.data, judge_cfg.sample_every or 8, judge_cfg.max_yaw)
 
     record = {
         "run_id": run_id,
