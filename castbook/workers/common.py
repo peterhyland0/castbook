@@ -60,10 +60,12 @@ diffusion_image = _with_source(
 
 judge_image = _with_source(
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("build-essential", "libgl1", "libglib2.0-0", "ffmpeg")
+    # libegl1/libgles2: MediaPipe's task runtime links against them even on CPU.
+    .apt_install("build-essential", "libgl1", "libglib2.0-0", "libegl1", "libgles2", "ffmpeg")
     .uv_pip_install(
         *_CORE_DEPS,
         "insightface==0.7.3",
+        "mediapipe",
         "onnxruntime",
         "opencv-python-headless",
         "imageio",

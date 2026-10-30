@@ -70,3 +70,38 @@ def test_profile_frames_get_a_band_and_grey_marker():
     assert 'fill="var(--band)"' in svg
     assert "profile · not scored" in svg
     assert svg.count('fill="var(--text-muted)"') == 1
+
+
+def test_verdict_chips_and_occlusion_marker(tmp_path):
+    d = _run_dir(tmp_path, "r3")
+    rec = json.loads((d / "record.json").read_text())
+    rec["verdicts"] = {
+        "keyframe": {
+            "status": "pass",
+            "metric": "p10",
+            "value": 0.76,
+            "threshold": 0.5,
+            "coverage": 1.0,
+            "reasons": ["p10 0.76 ≥ 0.50"],
+        },
+        "clip": {
+            "status": "unverifiable",
+            "metric": "p10",
+            "value": 0.6,
+            "threshold": 0.5,
+            "coverage": 0.24,
+            "reasons": ["only 5/21 frames scorable (need 50%)"],
+        },
+    }
+    rec["identity"]["clip"]["occluded_rate"] = 0.5
+    rec["identity"]["clip"]["max_yaw"] = 45
+    rec["identity"]["clip"]["profile_rate"] = 0.2
+    rec["identity"]["clip"]["n_scored"] = 1
+    rec["identity"]["clip_per_frame"][2].update({"occluded": True, "hand_overlap": 0.4, "status": "occluded"})
+    (d / "record.json").write_text(json.dumps(rec))
+    page = render_run(d).read_text()
+    assert 'class="chip pass"' in page and 'class="chip unverifiable"' in page
+    assert "Re-prompt so the face stays visible" in page
+    assert '<path d="M' in page  # diamond marker for the occluded frame
+    assert "hand on face 50%" in page
+    assert 'class="chip unverifiable"' in render_index(tmp_path).read_text()

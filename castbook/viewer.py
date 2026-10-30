@@ -27,12 +27,16 @@ CSS = """
   --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #e3e2dd;
   --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77766f;
   --grid: #ebeae6; --series-1: #2a78d6; --ref: #77766f; --band: #efeee9;
+  --good: #0ca30c; --good-ink: #0a7d0a; --warning: #fab219; --warning-ink: #8a5a00;
+  --critical: #d03b3b; --critical-ink: #b02c2c;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #96958c;
     --grid: #262624; --series-1: #3987e5; --ref: #96958c; --band: #252523;
+    --good: #0ca30c; --good-ink: #5fcf5f; --warning: #fab219; --warning-ink: #fab219;
+    --critical: #d03b3b; --critical-ink: #ef7d7d;
   }
 }
 * { box-sizing: border-box; }
@@ -68,6 +72,18 @@ svg.chart text { fill: var(--text-secondary); font-size: 11px; }
   border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px;
   box-shadow: 0 2px 8px rgba(0,0,0,.12); display: none; white-space: nowrap; }
 .hint { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
+.verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.verdict { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  display: flex; gap: 12px; align-items: flex-start; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 10px 2px 6px;
+  font-size: 12px; font-weight: 600; white-space: nowrap; border: 1px solid currentColor; }
+.chip .dot { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center;
+  justify-content: center; color: #fff; font-size: 11px; line-height: 1; }
+.chip.pass { color: var(--good-ink); } .chip.pass .dot { background: var(--good); }
+.chip.fail { color: var(--critical-ink); } .chip.fail .dot { background: var(--critical); }
+.chip.unverifiable { color: var(--warning-ink); } .chip.unverifiable .dot { background: var(--warning); color: #1a1a19; }
+.verdict .what { font-weight: 600; } .verdict .why { color: var(--text-secondary); font-size: 13px; }
+@media (max-width: 720px) { .verdicts { grid-template-columns: 1fr; } }
 details { margin-top: 12px; }
 summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
 .prompt { color: var(--text-secondary); font-size: 13px; margin: 4px 0 0; }
@@ -155,11 +171,18 @@ def identity_chart_svg(per_frame: list[dict], n_frames: int, keyframe_sim: float
                 f'stroke-width="1.5"/>'
             )
         else:
-            fill = "var(--text-muted)" if p.get("profile") else "var(--series-1)"
-            parts.append(
-                f'<circle cx="{x:.1f}" cy="{_y(p["sim"]):.1f}" r="4" fill="{fill}" '
-                f'stroke="var(--surface-1)" stroke-width="2"/>'
-            )
+            y = _y(p["sim"])
+            fill = "var(--text-muted)" if p.get("profile") or p.get("occluded") else "var(--series-1)"
+            if p.get("occluded"):
+                # Diamond = a hand covers the face, whether or not the frame is also a profile.
+                parts.append(
+                    f'<path d="M{x:.1f} {y - 5.5:.1f} L{x + 5.5:.1f} {y:.1f} L{x:.1f} {y + 5.5:.1f} L{x - 5.5:.1f} {y:.1f} Z" '
+                    f'fill="{fill}" stroke="var(--surface-1)" stroke-width="2"/>'
+                )
+            else:
+                parts.append(
+                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{fill}" stroke="var(--surface-1)" stroke-width="2"/>'
+                )
     parts.append(
         f'<line id="playhead" x1="{PAD_L}" x2="{PAD_L}" y1="{PAD_T}" y2="{H - PAD_B}" stroke="var(--text-primary)" '
         f'stroke-width="1" opacity="0.5"/>'
@@ -174,6 +197,44 @@ def identity_chart_svg(per_frame: list[dict], n_frames: int, keyframe_sim: float
     )
     parts.append("</svg>")
     return "".join(parts)
+
+
+_VERDICT_ICON = {"pass": "✓", "fail": "✕", "unverifiable": "?"}
+_VERDICT_NEXT = {
+    "pass": "Keep this take.",
+    "fail": "Re-roll with a new seed; escalate the model after repeated fails.",
+    "unverifiable": "Re-prompt so the face stays visible (less head turn, hands away), then re-score.",
+}
+
+
+def _frame_status_label(p: dict) -> str:
+    if p["sim"] is None:
+        return "no face"
+    flags = [f for f, on in (("profile", p.get("profile")), ("hand on face", p.get("occluded"))) if on]
+    return f"{', '.join(flags)}; not scored" if flags else "scored"
+
+
+def _verdicts_html(record: dict) -> str:
+    verdicts = record.get("verdicts") or {}
+    cards = []
+    for what in ("keyframe", "clip"):
+        v = verdicts.get(what)
+        if not v:
+            continue
+        reasons = "; ".join(html.escape(r) for r in v["reasons"])
+        cards.append(
+            f'<div class="verdict"><span class="chip {v["status"]}"><span class="dot">{_VERDICT_ICON[v["status"]]}</span>'
+            f'{v["status"]}</span><div><div class="what">{what.capitalize()} identity gate</div>'
+            f'<div class="why">{reasons}. {_VERDICT_NEXT[v["status"]]}</div></div></div>'
+        )
+    return f'<div class="verdicts">{"".join(cards)}</div>' if cards else ""
+
+
+def _gate_cell(record: dict) -> str:
+    v = (record.get("verdicts") or {}).get("clip")
+    if not v:
+        return "—"
+    return f'<span class="chip {v["status"]}"><span class="dot">{_VERDICT_ICON[v["status"]]}</span>{v["status"]}</span>'
 
 
 def _step_rows(record: dict, models: dict[str, str]) -> tuple[str, float]:
@@ -219,7 +280,8 @@ def render_run(run_dir: Path) -> Path:
         f'<tr><td class="num">{p["frame"]}</td><td class="num">{p["frame"] / fps:.2f}</td>'
         f'<td class="num">{"no face" if p["sim"] is None else f"{p['sim']:.3f}"}</td>'
         f'<td class="num">{_fmt(p.get("yaw"), 0)}</td>'
-        f"<td>{'no face' if p['sim'] is None else ('profile, not scored' if p.get('profile') else 'scored')}</td></tr>"
+        f'<td class="num">{"—" if p.get("hand_overlap") is None else f"{p['hand_overlap']:.0%}"}</td>'
+        f"<td>{_frame_status_label(p)}</td></tr>"
         for p in per_frame
     )
     pose_aware = clip.get("max_yaw") is not None
@@ -228,10 +290,14 @@ def render_run(run_dir: Path) -> Path:
     )
     clip_sub = f"min {_fmt(clip['min'])} · p10 {_fmt(clip['p10'])} · faces {clip['face_rate']:.0%}"
     if pose_aware:
-        clip_sub += f" · profile {clip['profile_rate']:.0%} · scored {clip['n_scored']}/{clip['n_frames']}"
+        clip_sub += f" · profile {clip['profile_rate']:.0%}"
+        if "occluded_rate" in clip:
+            clip_sub += f" · hand on face {clip['occluded_rate']:.0%}"
+        clip_sub += f" · scored {clip['n_scored']}/{clip['n_frames']}"
     hint = (
         f"Shaded frames are turned more than {clip['max_yaw']:.0f}° from the camera; they are counted as profile "
         "and left out of the score, because ArcFace similarity collapses on profiles even for the right person."
+        + (" Diamonds mark frames where a hand covers the face." if "occluded_rate" in clip else "")
         if pose_aware
         else "This run predates the pose-aware judge: turned-away frames score low even when the identity is right."
     )
@@ -247,6 +313,7 @@ def render_run(run_dir: Path) -> Path:
 <h1>{html.escape(record["character"])} · {html.escape(record["workflow"])}</h1>
 <p class="meta"><code>{record["run_id"]}</code> · seed {record["seed"]} · {record["wall_s"]:.0f} s wall</p>
 
+{_verdicts_html(record)}
 <div class="stats">
   <div class="stat"><div class="label">Keyframe identity</div><div class="value">{_fmt(kf["mean"])}</div>
     <div class="sub">ArcFace cosine vs portrait</div></div>
@@ -275,7 +342,7 @@ def render_run(run_dir: Path) -> Path:
   <p class="hint">Hover for values; click to jump the clip to that frame. Hollow markers on the baseline are
   frames with no detected face. {hint}</p>
   <details><summary>Table view</summary>
-    <table><thead><tr><th class="num">Frame</th><th class="num">Time (s)</th><th class="num">Similarity</th><th class="num">Yaw °</th><th>Status</th></tr></thead>
+    <table><thead><tr><th class="num">Frame</th><th class="num">Time (s)</th><th class="num">Similarity</th><th class="num">Yaw °</th><th class="num">Hand on face</th><th>Status</th></tr></thead>
     <tbody>{frame_rows}</tbody></table></details>
 </div>
 
@@ -307,7 +374,9 @@ hit.addEventListener("mousemove", e => {{
   cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
   tip.innerHTML = `<b>frame ${{p.frame}}</b> · ${{(p.frame / D.fps).toFixed(2)}} s<br>` +
     (p.sim === null ? "no face detected" : `similarity ${{p.sim.toFixed(3)}}`) +
-    (p.yaw == null ? "" : `<br>yaw ${{p.yaw.toFixed(0)}}°${{p.profile ? " · profile, not scored" : ""}}`);
+    (p.yaw == null ? "" : `<br>yaw ${{p.yaw.toFixed(0)}}°${{p.profile ? " · profile" : ""}}`) +
+    (p.hand_overlap == null ? "" : `<br>hand covers ${{(p.hand_overlap * 100).toFixed(0)}}% of face${{p.occluded ? " · occluded" : ""}}`) +
+    (p.status && p.status !== "scored" && p.status !== "no_face" ? "<br><i>not scored</i>" : "");
   const box = svg.getBoundingClientRect(), wrap = svg.parentElement.getBoundingClientRect();
   const px = (x / D.W) * box.width;
   tip.style.display = "block";
@@ -338,6 +407,7 @@ def render_index(runs_dir: Path = RUNS_DIR) -> Path:
         rows.append(
             f'<tr><td><a href="{d.name}/index.html">{r["run_id"]}</a></td><td>{html.escape(r["character"])}</td>'
             f"<td>{html.escape(r['workflow'])}</td>"
+            f"<td>{_gate_cell(r)}</td>"
             f'<td class="num">{_fmt(ident["keyframe"]["mean"])}</td><td class="num">{_fmt(ident["clip"]["mean"])}</td>'
             f'<td class="num">{_fmt(ident["clip"]["min"])}</td>'
             f'<td class="num">{"—" if ident["clip"].get("max_yaw") is None else f"{ident['clip']['profile_rate']:.0%}"}</td>'
@@ -349,7 +419,7 @@ def render_index(runs_dir: Path = RUNS_DIR) -> Path:
 <title>Castbook runs</title><style>{CSS}</style></head>
 <body><main><h1>Castbook runs</h1><p class="meta">{len(rows)} run(s) in <code>{runs_dir}</code></p>
 <div class="card"><table><thead><tr><th>Run</th><th>Character</th><th>Workflow</th>
-<th class="num">Keyframe ID</th><th class="num">Clip ID mean</th><th class="num">Clip ID min</th><th class="num">Profile</th>
+<th>Gate</th><th class="num">Keyframe ID</th><th class="num">Clip ID mean</th><th class="num">Clip ID min</th><th class="num">Profile</th>
 <th class="num">GPU $</th><th class="num">Wall s</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
 </main></body></html>
 """

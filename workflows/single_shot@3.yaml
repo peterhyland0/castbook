@@ -1,0 +1,28 @@
+# @2 + occlusion check and gate verdicts. Keyframe and clip steps are unchanged from @1/@2, so their
+# cached artifacts are reused; only the judge differs.
+# Immutable once used in a run: change a parameter by adding single_shot@4.yaml.
+id: single_shot
+version: 3
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true        # 4-step distilled LoRA; false = 40 steps with true CFG
+      width: 1248            # 16:9, downscaled to the clip size before animating
+      height: 720
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true        # 4-step distilled LoRA on both experts
+      width: 832
+      height: 480
+      num_frames: 81         # 5 s at 16 fps
+      fps: 16
+  judge:
+    sample_every: 4          # score every 4th frame
+    max_yaw: 45              # degrees; frames turned further are counted as profile, not scored
+    max_hand_overlap: 0.15   # share of the face box a hand may cover before the frame counts as occluded
+    gate:
+      metric: p10            # min | p10 | mean over scored frames
+      min_score: 0.5         # provisional: same-person generated frames scored 0.60-0.76 so far
+      min_coverage: 0.5      # below this share of scorable frames the verdict is "unverifiable"

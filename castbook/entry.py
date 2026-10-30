@@ -13,7 +13,7 @@ from castbook.pipeline import make_golden, single_shot
 from castbook.viewer import render_index, render_run
 from castbook.workers.common import app
 from castbook.workers.download import download
-from castbook.workers.smoke import smoke
+from castbook.workers.smoke import smoke, smoke_judge
 
 OUT = Path("out")
 
@@ -27,7 +27,25 @@ def download_weights(only: str = ""):
 
 @app.local_entrypoint()
 def check():
-    print(json.dumps(smoke.remote(), indent=2))
+    print(json.dumps({"diffusion": smoke.remote(), "judge": smoke_judge.remote()}, indent=2))
+
+
+@app.local_entrypoint()
+def judge_file(image: str, character: str = "c01", workflow: str = "single_shot@3"):
+    """Score one local image against a golden character with a workflow's judge settings."""
+    from castbook.pipeline import golden_embedding
+    from castbook.workers.judge import Judge
+    from castbook.workflow import load_workflow
+
+    cfg = load_workflow(workflow).steps["judge"]
+    r = Judge().score_image.remote(
+        golden_embedding.remote(character),
+        Path(image).read_bytes(),
+        max_yaw=cfg.max_yaw,
+        max_hand_overlap=cfg.max_hand_overlap,
+        gate=cfg.gate,
+    )
+    print(json.dumps({"verdict": r["verdict"], "frame": r["frame"]}, indent=2))
 
 
 @app.local_entrypoint()
@@ -52,7 +70,7 @@ def shot(
         "The person turns their head slowly toward the window and smiles softly, rain running "
         "down the glass, gentle camera push-in, cinematic lighting."
     ),
-    workflow: str = "single_shot@2",
+    workflow: str = "single_shot@3",
     seed: int = 7,
 ):
     r = single_shot.remote(character, keyframe_prompt, motion_prompt, workflow, seed)

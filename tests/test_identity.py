@@ -65,3 +65,47 @@ def test_all_profile_is_unscorable_not_zero():
 def test_yaws_must_align():
     with pytest.raises(ValueError):
         score_frames(_unit(1, 0), [_unit(1, 0)], [0.0, 1.0])
+
+
+def test_overlap_fraction():
+    from castbook.identity import overlap_fraction
+
+    face = (0, 0, 10, 10)
+    assert overlap_fraction(face, (5, 0, 15, 10)) == pytest.approx(0.5)
+    assert overlap_fraction(face, (20, 20, 30, 30)) == 0.0
+    assert overlap_fraction(face, (-5, -5, 20, 20)) == pytest.approx(1.0)
+
+
+def test_occluded_frames_are_counted_but_not_scored():
+    ref = _unit(1, 0)
+    s = score_frames(ref, [_unit(1, 0), _unit(0, 1)], [0.0, 0.0], 45, [0.0, 0.6], 0.2)
+    assert s.n_scored == 1 and s.occluded_rate == pytest.approx(0.5) and s.min == pytest.approx(1.0)
+
+
+def test_profile_takes_precedence_over_occlusion():
+    from castbook.identity import frame_status
+
+    assert frame_status(True, 80.0, 0.9, 45, 0.2) == "profile"
+    assert frame_status(True, 10.0, 0.9, 45, 0.2) == "occluded"
+    assert frame_status(False, None, None, 45, 0.2) == "no_face"
+
+
+def test_verdicts():
+    from castbook.identity import GateConfig, verdict
+
+    gate = GateConfig(metric="p10", min_score=0.5, min_coverage=0.5)
+    ref = _unit(1, 0)
+    good = score_frames(ref, [_unit(1, 0.1)] * 4, [0.0] * 4, 45)
+    assert verdict(good, gate).status == "pass"
+    bad = score_frames(ref, [_unit(0.3, 1)] * 4, [0.0] * 4, 45)
+    assert verdict(bad, gate).status == "fail"
+    # 3 of 4 frames in profile: 25% coverage, below the 50% floor, so no claim either way.
+    mostly_profile = score_frames(ref, [_unit(0.3, 1)] * 4, [0.0, 80.0, 80.0, 80.0], 45)
+    v = verdict(mostly_profile, gate)
+    assert v.status == "unverifiable" and any("profile" in r for r in v.reasons)
+    assert verdict(score_frames(ref, [None, None]), gate).status == "unverifiable"
+
+
+def test_profile_and_occlusion_rates_can_overlap():
+    s = score_frames(_unit(1, 0), [_unit(1, 0)] * 2, [80.0, 0.0], 45, [0.9, 0.0], 0.2)
+    assert s.profile_rate == pytest.approx(0.5) and s.occluded_rate == pytest.approx(0.5) and s.n_scored == 1

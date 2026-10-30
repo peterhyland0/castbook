@@ -225,7 +225,8 @@ castbook/
 - [x] `KeyframeWorker` + `VideoWorker` as `@app.cls` with `@modal.enter` loading
 - [x] `JudgeWorker`: ArcFace per sampled frame vs the character embedding → min / p10 / mean
 - [x] Make the judge pose-aware: skip frames past 45° yaw and report a profile rate (`single_shot@2`; clip min 0.01 → 0.61 on the same cached clip)
-- [ ] Gate verdicts: pass / fail / *unverifiable* (frontal coverage below a floor) plus a face-occlusion check. The pose-aware rerun scored only 5 of 21 frames, and similarity fell at constant yaw when a hand covered the face.
+- [x] Gate verdicts: pass / fail / *unverifiable* (scorable coverage below 50%) plus a hand-on-face occlusion check (`single_shot@3`). Positive control: a pasted hand turns a 0.71 pass into *unverifiable* instead of a false fail.
+- [ ] Calibrate `min_score`, `min_coverage` and `max_hand_overlap` on ~100 hand-labeled frames (M3); all three are provisional.
 - [x] One shot: portrait + prompt → keyframe → 5 s clip → identity score
 - [x] Log GPU-seconds and $ per step (first run: $0.34, of which $0.025 is warm clip inference; see README)
 

@@ -99,12 +99,20 @@ def make_golden() -> list[dict]:
     return results
 
 
+@app.function(image=cpu_image, volumes={ARTIFACTS_DIR: artifacts_vol}, timeout=300)
+def golden_embedding(character_id: str) -> list[float]:
+    golden = _golden_manifest(Path(ARTIFACTS_DIR)).get(character_id)
+    if golden is None or golden["embedding"] is None:
+        raise ValueError(f"no usable golden portrait for {character_id}")
+    return golden["embedding"]
+
+
 @app.function(image=cpu_image, volumes={ARTIFACTS_DIR: artifacts_vol}, timeout=3600)
 def single_shot(
     character_id: str,
     keyframe_prompt: str,
     motion_prompt: str,
-    workflow_ref: str = "single_shot@2",
+    workflow_ref: str = "single_shot@3",
     seed: int = 7,
 ) -> dict:
     """Portrait -> keyframe -> clip, with identity scores and per-step cost."""
@@ -138,7 +146,13 @@ def single_shot(
     keyframe: Artifact = runner.run(
         "keyframe", kf_cfg.model, kf_params, [golden["sha256"]], seed, "keyframe.png", compute_keyframe
     )
-    kf_score = judge.score_image.remote(reference, keyframe.data, wf.steps["judge"].max_yaw)
+    judge_cfg = wf.steps["judge"]
+    judge_kwargs = {
+        "max_yaw": judge_cfg.max_yaw,
+        "max_hand_overlap": judge_cfg.max_hand_overlap,
+        "gate": judge_cfg.gate,
+    }
+    kf_score = judge.score_image.remote(reference, keyframe.data, **judge_kwargs)
 
     clip_cfg = wf.steps["clip"]
     clip_params = {**clip_cfg.params, "prompt": motion_prompt}
@@ -158,8 +172,7 @@ def single_shot(
         return r["mp4"], {"timings": [r["timing"]], "n_frames": r["n_frames"]}
 
     clip = runner.run("clip", clip_cfg.model, clip_params, [keyframe.key], seed, "clip.mp4", compute_clip)
-    judge_cfg = wf.steps["judge"]
-    clip_score = judge.score_video.remote(reference, clip.data, judge_cfg.sample_every or 8, judge_cfg.max_yaw)
+    clip_score = judge.score_video.remote(reference, clip.data, judge_cfg.sample_every or 8, **judge_kwargs)
 
     record = {
         "run_id": run_id,
@@ -168,10 +181,12 @@ def single_shot(
         "seed": seed,
         "prompts": {"keyframe": keyframe_prompt, "clip": motion_prompt},
         "steps": runner.steps,
+        "verdicts": {"keyframe": kf_score.get("verdict"), "clip": clip_score.get("verdict")},
         "identity": {
             "keyframe": kf_score["score"],
             "clip": clip_score["score"],
             "clip_per_frame": clip_score["per_frame"],
+            "keyframe_frame": kf_score.get("frame"),
         },
         "gpu_usd": total_usd(runner.timings()),
         "wall_s": round(time.perf_counter() - t_run, 1),

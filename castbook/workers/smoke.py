@@ -2,7 +2,7 @@
 mistakes before paying for an H100 cold start that would crash in @modal.enter."""
 
 from castbook.config import MODELS
-from castbook.workers.common import MODELS_DIR, app, diffusion_image, models_vol
+from castbook.workers.common import MODELS_DIR, app, diffusion_image, judge_image, models_vol
 
 
 @app.function(image=diffusion_image, volumes={MODELS_DIR: models_vol}, cpu=2, memory=8192, timeout=900)
@@ -34,3 +34,27 @@ def smoke() -> dict:
                 keys = list(st.keys())
             report[f"{name}:{f.split('/')[-1]}"] = {"n_keys": len(keys), "sample": keys[:2]}
     return report
+
+
+@app.function(image=judge_image, volumes={MODELS_DIR: models_vol}, cpu=2, memory=4096, timeout=600)
+def smoke_judge() -> dict:
+    """Same idea for the judge image: InsightFace + MediaPipe import and model setup."""
+    from pathlib import Path
+
+    import insightface
+    import mediapipe as mp
+    from mediapipe.tasks.python import BaseOptions, vision
+
+    from castbook.workers.judge import HAND_MODEL_URL
+
+    hand_model = Path(MODELS_DIR, "mediapipe", "hand_landmarker.task")
+    if not hand_model.exists():
+        import urllib.request
+
+        hand_model.parent.mkdir(parents=True, exist_ok=True)
+        urllib.request.urlretrieve(HAND_MODEL_URL, hand_model)
+        models_vol.commit()
+    vision.HandLandmarker.create_from_options(
+        vision.HandLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(hand_model)), num_hands=2)
+    )
+    return {"insightface": str(insightface.__version__), "mediapipe": str(mp.__version__)}

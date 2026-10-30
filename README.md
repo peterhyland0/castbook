@@ -44,9 +44,33 @@ content-addressed keys match @1. The rerun was a cache hit on both: **$0 GPU, 15
 - **Pose isn't the whole story.** Between frames 36 and 56 the yaw holds at about 88° while similarity falls from
   0.37 to 0.02. That's where her hand comes up near her face, so occlusion matters too; a face-visibility check
   belongs next to the yaw check.
-- **76% of this clip can't be vouched for.** The gate needs three verdicts, not two: *pass*, *fail* and
-  *unverifiable* (too little frontal coverage). "Unverifiable" should trigger a cheap fallback, such as a re-prompt
-  with less head turn or a check from a second angle, not a re-roll.
+- **76% of this clip can't be vouched for.** That's why the gate has three verdicts (below).
+
+## Gate verdicts and occlusion (`single_shot@3`, run `20261030T024303-676f72`)
+
+The judge now returns a verdict per artifact:
+- **pass / fail:** a claim about identity, using `p10` over scored frames against `min_score` 0.5. The threshold is
+  provisional until calibrated: same-person generated frames have scored 0.60–0.76 so far.
+- **unverifiable:** fewer than 50% of sampled frames could be scored, so no claim either way. The next action is a
+  re-prompt (less head turn, hands away from the face), not a blind re-roll.
+
+**Occlusion check:** MediaPipe's hand landmarker finds hands, and a frame counts as occluded when hands cover more
+than 15% of the face box. Profile and occlusion are counted independently, so a frame can be both.
+
+| Artifact | Verdict | Why |
+|---|---|---|
+| keyframe | **pass** | p10 0.76 ≥ 0.50 |
+| clip | **unverifiable** | only 5/21 frames scorable; 76% profile; hand on face 0% |
+| control: clip frame 0 | **pass** | p10 0.71 |
+| control: frame 0 with a hand pasted over the face | **unverifiable** | hand covers 17.7% of face box; raw similarity fell to 0.39, which would otherwise have been a false *fail* |
+
+- **The hand in this clip is beside the face, not on it.** MediaPipe finds one or two hands from frame 40 on, at
+  x≈456–548, while the face box ends at x≈398–446. My earlier guess that a hand caused the late similarity drop was
+  wrong. The drop at constant ~88° yaw is the extreme angle itself, where even the pose estimate becomes unstable
+  (pitch and roll swing ±180°).
+- **Detection confidence and embedding norm can't separate occlusion from pose on their own.** Both fell across
+  the turn (0.89 → 0.67 and 18–20 → 13–15), so they're recorded per frame for calibration but aren't gating.
+- **Score any image** with `uv run modal run -m castbook.entry::judge_file --image <path> --character c01`.
 
 ## Layout
 

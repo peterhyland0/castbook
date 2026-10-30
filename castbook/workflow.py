@@ -15,6 +15,8 @@ class StepConfig(BaseModel):
     params: dict[str, Any] = {}
     sample_every: int | None = None
     max_yaw: float | None = None
+    max_hand_overlap: float | None = None
+    gate: dict[str, Any] | None = None
 
 
 class Workflow(BaseModel):
