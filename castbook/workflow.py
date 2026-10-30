@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict
 
 WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / "workflows"
 
+Cause = Literal["small", "profile", "occluded", "no_face"]  # identity.CAUSES
+
 
 class RetryPolicy(BaseModel):
     """How the identity gate drives re-rolls for one step.
@@ -17,12 +19,20 @@ class RetryPolicy(BaseModel):
     `reprompt_suffix` (keep the face visible) up to `max_reprompts` times, then
     re-roll. When attempts run out, keep the best attempt (pass > unverifiable >
     fail, then by score) and mark the shot as degraded rather than failing the run.
+
+    `reprompt_by_cause` overrides the suffix for what blocked scoring
+    (identity.blocking_cause: small, profile, occluded, no_face), e.g. tighter
+    framing when the face is too small; other causes use `reprompt_suffix`.
     """
 
     model_config = ConfigDict(extra="forbid")
     max_attempts: int = 3
     max_reprompts: int = 1
     reprompt_suffix: str = ""
+    reprompt_by_cause: dict[Cause, str] = {}
+
+    def suffix_for(self, cause: str | None) -> str:
+        return self.reprompt_by_cause.get(cause, self.reprompt_suffix)
 
 
 class StepConfig(BaseModel):

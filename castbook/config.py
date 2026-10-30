@@ -60,7 +60,10 @@ GPU_USD_PER_SECOND: dict[str, float] = {
 MEASURED: dict[str, dict] = {
     "keyframe": {"gpu": "H100", "load_s": 43.4, "infer_s": 2.4},
     "end_keyframe": {"gpu": "H100", "load_s": 43.4, "infer_s": 2.4},
-    "clip": {"gpu": "H100", "load_s": 198.2, "infer_s": 19.8},
+    "clip": {"gpu": "H100", "load_s": 198.2, "infer_s": 19.8, "px": 832 * 480},
 }
+# Steps with a measured `px` are rescaled for other resolutions: at least linear in pixel count (convolutions,
+# VAE), at most quadratic (full attention over video tokens). Measured: a 1248x720 clip took 71 s warm (Oct 30),
+# about pixels^1.6, inside the bounds.
 # Each GPU worker stays up this long after its last call (scaledown_window) and Modal bills that idle time.
 IDLE_TAIL_S = 120

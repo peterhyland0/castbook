@@ -255,3 +255,45 @@ def test_lastframe_chain_stops_after_a_shot_with_no_clip(tmp_path):
     r = _run(tmp_path, b, _script(3), wf=load_workflow("lastframe_chain@1"))
     assert [s.status for s in r.shots] == ["pass", "error", "error"]
     assert "previous shot" in r.shots[2].error and r.final_key is not None
+
+
+def test_small_face_reprompt_asks_for_tighter_framing(tmp_path):
+    wf = load_workflow("keyframe_flf@2")
+    clip = wf.steps["clip"].retry
+    small = clip.reprompt_by_cause["small"]
+    assert small != clip.reprompt_suffix
+
+    def judge(p, s):
+        if p.endswith(small):
+            return _verdict("pass")
+        r = _verdict("unverifiable", None)
+        r["score"] = {"face_rate": 1.0, "small_rate": 1.0, "profile_rate": 0.0}
+        return r
+
+    r = _run(tmp_path, FakeBackend(rules={"clip": judge}), _script(1, end=True), wf=wf)
+    clips = r.shots[0].clip_attempts
+    assert [a.verdict["status"] for a in clips] == ["unverifiable", "pass"]
+    assert clips[1].prompt.endswith(small)
+
+
+def test_other_causes_keep_the_default_suffix(tmp_path):
+    wf = load_workflow("keyframe_flf@2")
+    default = wf.steps["clip"].retry.reprompt_suffix
+
+    def judge(p, s):
+        if p.endswith(default):
+            return _verdict("pass")
+        r = _verdict("unverifiable", None)
+        r["score"] = {"face_rate": 1.0, "small_rate": 0.0, "profile_rate": 0.8}
+        return r
+
+    r = _run(tmp_path, FakeBackend(rules={"clip": judge}), _script(1, end=True), wf=wf)
+    assert r.shots[0].clip_attempts[1].prompt.endswith(default)
+
+
+def test_flf_v2_reuses_v1_first_attempts(tmp_path):
+    """Same prompts and params on attempt 0, so @2 only pays for attempts whose re-prompt changed."""
+    _run(tmp_path, FakeBackend(), _script(2, end=True), wf=load_workflow("keyframe_flf@1"))
+    b = FakeBackend()
+    _run(tmp_path, b, _script(2, end=True), wf=load_workflow("keyframe_flf@2"))
+    assert b.calls == {"keyframe": 0, "clip": 0, "stitch": 0}

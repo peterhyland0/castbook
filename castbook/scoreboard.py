@@ -26,6 +26,14 @@ _GATED = ("keyframe_attempts", "end_keyframe_attempts", "clip_attempts")
 _ICON = {"pass": "✓", "fail": "✕", "unverifiable": "?"}
 
 
+def _short_error(error: str | None, limit: int = 200) -> str:
+    """Last line of an error, which for a remote traceback is the exception itself (e.g. CUDA out of memory)."""
+    if not error:
+        return "no clip"
+    last = [line for line in error.strip().splitlines() if line.strip()][-1].strip()
+    return last if len(last) <= limit else last[: limit - 1] + "…"
+
+
 def _chosen(attempts: list[dict], key: str | None) -> dict | None:
     return next((a for a in attempts if a["key"] == key), None)
 
@@ -55,7 +63,7 @@ def summarize(result: dict) -> dict:
                 "clip_p10": clip["verdict"]["value"] if clip else None,
                 "clip_mean": clip["score"].get("mean") if clip else None,
                 "coverage": clip["verdict"]["coverage"] if clip else None,
-                "reasons": clip["verdict"]["reasons"] if clip else [s.get("error") or "no clip"],
+                "reasons": clip["verdict"]["reasons"] if clip else [_short_error(s.get("error"))],
                 "first_try_pass": bool(first_try and s["clip_attempts"]),
                 "attempts": {f.removesuffix("_attempts"): len(s.get(f, [])) for f in _GATED if s.get(f)},
             }
@@ -207,9 +215,14 @@ document.getElementById("play").addEventListener("click", () => {{
 
 
 def main(out_dir: str) -> None:
+    """Re-summarize each arm from its saved record (so summary changes apply to old runs), then re-render."""
     d = Path(out_dir)
     summary = json.loads((d / "summary.json").read_text())
-    print(render(d, summary["arms"], summary["script"]))
+    arms = []
+    for arm in summary["arms"]:
+        record = d / arm["workflow"] / "record.json"
+        arms.append(summarize(json.loads(record.read_text())) if record.exists() else arm)
+    print(render(d, arms, summary["script"]))
 
 
 if __name__ == "__main__":

@@ -220,3 +220,20 @@ def verdict(score: IdentityScore, gate: GateConfig) -> Verdict:
     if value < gate.min_score:
         return Verdict(status="fail", reasons=(f"{gate.metric} {value:.2f} < {gate.min_score:.2f}",), **common)
     return Verdict(status="pass", reasons=(f"{gate.metric} {value:.2f} ≥ {gate.min_score:.2f}",), **common)
+
+
+CAUSES = ("small", "profile", "occluded", "no_face")
+
+
+def blocking_cause(score: dict) -> str | None:
+    """What kept most frames from being scored (an IdentityScore as a dict), so a
+    re-prompt can target it: a face that is too small needs tighter framing, not a
+    head turn. Ties go to the earlier cause in CAUSES; None if nothing was blocked."""
+    rates = {
+        "small": score.get("small_rate") or 0.0,
+        "profile": score.get("profile_rate") or 0.0,
+        "occluded": score.get("occluded_rate") or 0.0,
+        "no_face": 1 - score["face_rate"] if score.get("face_rate") is not None else 0.0,
+    }
+    cause = max(CAUSES, key=lambda c: rates[c])
+    return cause if rates[cause] > 0 else None

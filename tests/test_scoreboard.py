@@ -49,3 +49,13 @@ def test_render_writes_one_page_with_every_arm(tmp_path):
         assert ref in page
     assert page.count("<video") == 3 and "data:video/mp4;base64," in page
     json.dumps(arms)  # summaries are what summary.json stores
+
+
+def test_short_error_keeps_the_last_line():
+    from castbook.scoreboard import _short_error
+
+    tb = "ExecutionError: remote failed\nTraceback (most recent call last):\n  File x\n\n"
+    tb += "torch.OutOfMemoryError: CUDA out of memory.\n"
+    assert _short_error(tb) == "torch.OutOfMemoryError: CUDA out of memory."
+    assert _short_error(None) == "no clip"
+    assert len(_short_error("x" * 500)) == 200

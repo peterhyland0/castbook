@@ -139,3 +139,13 @@ def test_small_takes_precedence_over_profile():
     assert frame_status(True, 80, None, 45, None, 40, 64) == "small"
     assert frame_status(True, 80, None, 45, None, 100, 64) == "profile"
     assert face_px((10, 0, 74, 80)) == 64 and not is_small(64, 64) and is_small(63.9, 64)
+
+
+def test_blocking_cause_picks_the_largest_blocker():
+    from castbook.identity import blocking_cause
+
+    assert blocking_cause({"face_rate": 1.0, "small_rate": 1.0, "profile_rate": 0.2}) == "small"
+    assert blocking_cause({"face_rate": 1.0, "small_rate": 0.1, "profile_rate": 0.6}) == "profile"
+    assert blocking_cause({"face_rate": 0.3}) == "no_face"
+    assert blocking_cause({"face_rate": 1.0, "small_rate": 0.5, "profile_rate": 0.5}) == "small"  # tie
+    assert blocking_cause({"face_rate": 1.0}) is None and blocking_cause({"p10": 0.7}) is None

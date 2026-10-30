@@ -5,6 +5,7 @@ Wan 2.2 is a two-expert MoE: `transformer` handles high-noise steps and
 """
 
 import io
+import os
 import tempfile
 import time
 
@@ -12,6 +13,8 @@ import modal
 
 from castbook.config import MODELS
 from castbook.workers.common import MODELS_DIR, TimedWorker, app, diffusion_image, models_vol
+
+TILE_ABOVE_PX = 832 * 480
 
 NEGATIVE = (
     "blurry, distorted face, deformed, extra limbs, flicker, low quality, watermark, text, static image, morphing"
@@ -32,6 +35,8 @@ class Video(TimedWorker):
     @modal.enter()
     def load(self):
         self._start_load()
+        # Fewer fragmentation OOMs near the memory ceiling; allocator setting only, outputs are unchanged.
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
         import torch
         from diffusers import AutoencoderKLWan, WanImageToVideoPipeline
 
@@ -65,6 +70,13 @@ class Video(TimedWorker):
         from PIL import Image
 
         t0 = time.perf_counter()
+        # Both bf16 experts and the text encoder stay resident (~70 GB of 80), which leaves too little for the fp32
+        # VAE to encode the conditioning video above 480p (1248x720 ran out of memory). Tile the VAE there; 480p
+        # stays untiled so earlier clips reproduce exactly.
+        if width * height > TILE_ABOVE_PX:
+            self.pipe.vae.enable_tiling()
+        else:
+            self.pipe.vae.disable_tiling()
         image = Image.open(io.BytesIO(first_frame)).convert("RGB").resize((width, height))
         kwargs = {}
         if last_frame is not None:

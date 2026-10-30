@@ -130,6 +130,30 @@ start). Total billed was $0.39, plus roughly $0.26 of idle time before the worke
   shot 1's two clips went from *fail* (0.24, 0.29) to *unverifiable*, and every other verdict was unchanged. Judge
   results are cached by artifact + judge settings, so the scoreboard reused them.
 
+## M3: fixing the small face (FLF @1 vs @2 vs @3, `out/scoreboard/cafe_morning_20261030-205510/`)
+
+Shot 1 was *unverifiable* in every arm because its face is too small in the clip. Two fixes, one arm each:
+
+| Workflow | Accepted | First try | s1 verdict | s2 p10 | s3 p10 | Clip infer | $/accepted s |
+|---|---|---|---|---|---|---|---|
+| `keyframe_flf@1` (baseline) | 2/3 | 2/3 | unverifiable (0% scorable, all < 64 px) | 0.52 | 0.62 | 20 s | **$0.0116** |
+| `keyframe_flf@2`: re-prompt *small* faces for tighter framing | 2/3 | 2/3 | unverifiable (0% scorable) | 0.52 | 0.62 | 20 s | $0.0118 |
+| `keyframe_flf@3`: @2 + clips at 1248×720 | 2/3 | 2/3 | **fail** (100% scorable, p10 0.44 / 0.44) | **0.59** | 0.62 | 71 s | $0.0341 |
+
+- **Re-prompting by cause works, but not for this cause here.** The retry now picks its suffix from what blocked
+  scoring (`reprompt_by_cause`: small / profile / occluded / no face). For a small face in first-last-frame mode,
+  though, both ends of the clip are fixed keyframes, so "the camera pushes in" has nothing to move: s1 stayed 0%
+  scorable. A small face has to be fixed upstream, in the keyframe or the resolution.
+- **720p makes shot 1 measurable, and it doesn't pass.** All 21 frames scored, and both attempts came in at p10
+  0.44. This can't yet tell drift from a face-size effect: at ~80 px the M2 run scored the right person at 0.52 vs
+  0.57 at 135 px, so a size-aware threshold (calibration) is the next question, not a lower `min_face_px`.
+- **720p costs 3.6× per clip** (71 s vs 20 s warm on H100, for 2.25× the pixels), so $/accepted second roughly
+  triples. s2's identity rose (0.52 → 0.59). Worth it for identity-critical wide shots, not as the default.
+- **720p first ran out of memory.** Both 14B experts and the text encoder stay on the GPU (~70 of 80 GB), leaving
+  too little for the fp32 VAE to encode the conditioning video at 1248×720. The worker now tiles the VAE above
+  480p (480p stays untiled, so cached clips reproduce). The failed run cost about $0.33; the re-run billed $0.45
+  plus idle tail.
+
 ## Layout
 
 ```

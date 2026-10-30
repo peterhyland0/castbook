@@ -1,0 +1,60 @@
+# keyframe_flf@2 with clips rendered at the keyframes' 1248x720 instead of 832x480. At 480p a face that is
+# 80 px in the keyframe shrinks to ~53 px in the clip, under the judge's 64 px floor.
+id: keyframe_flf
+version: 3
+mode: keyframe_flf
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+    retry:
+      max_attempts: 3          # keyframes are cheap (~5 s warm), so re-roll freely
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+      reprompt_by_cause:
+        small: " Framed closer: head and shoulders fill the frame, the face large and sharp."
+  end_keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+      # refs are [start keyframe, portrait]; Qwen-Image-Edit-Plus numbers them Picture 1 and Picture 2
+      prompt_template: >-
+        Picture 1 a few seconds later: {end} Keep the same location, camera angle, lighting and outfit as
+        Picture 1, and the same face as Picture 2. Cinematic 16:9 still.
+    retry:
+      max_attempts: 3          # keyframes are cheap (~5 s warm), so re-roll freely
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+      reprompt_by_cause:
+        small: " Framed closer: head and shoulders fill the frame, the face large and sharp."
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true
+      width: 1248            # same size as the keyframes (Wan needs multiples of 16), so no resampling
+      height: 720
+      num_frames: 81
+      fps: 16
+    retry:
+      max_attempts: 2          # clips cost ~4x a keyframe, so fewer tries
+      max_reprompts: 1
+      reprompt_suffix: " Keep the face turned toward the camera throughout; hands stay away from the face."
+      reprompt_by_cause:
+        small: " The camera pushes in close; head and shoulders fill the frame and the face stays large and sharp."
+  judge:
+    sample_every: 4
+    max_yaw: 45
+    max_hand_overlap: 0.15
+    min_face_px: 64            # narrower faces are unverifiable, not fail (provisional until M3 calibration)
+    gate:
+      metric: p10
+      min_score: 0.5
+      min_coverage: 0.5
+  stitch:
+    params:
+      fps: 16

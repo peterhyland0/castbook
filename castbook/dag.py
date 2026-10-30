@@ -35,6 +35,7 @@ from typing import Any, Protocol
 from castbook.config import MODELS
 from castbook.costs import StepTiming
 from castbook.hashing import sha256_bytes, step_key
+from castbook.identity import blocking_cause
 from castbook.shots import Script, ShotSpec
 from castbook.store import ArtifactStore
 from castbook.workflow import RetryPolicy, Workflow
@@ -222,8 +223,9 @@ class Executor:
             status = attempt.verdict["status"]
             if status == "pass":
                 break
-            if status == "unverifiable" and reprompts < policy.max_reprompts and policy.reprompt_suffix:
-                prompt = prompt + policy.reprompt_suffix
+            suffix = policy.suffix_for(blocking_cause(attempt.score)) if status == "unverifiable" else ""
+            if suffix and reprompts < policy.max_reprompts:
+                prompt = prompt + suffix
                 reprompts += 1
         return attempts
 

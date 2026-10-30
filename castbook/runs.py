@@ -108,17 +108,19 @@ def estimate(workflow: Workflow, n_shots: int) -> dict:
     `low` assumes warm containers and every step passing first time; `high`
     assumes a cold start per GPU worker (keyframe and end_keyframe share one),
     every attempt the retry policy allows, and the idle tail before scaledown.
+    A step run at a different resolution than it was measured at is scaled
+    linearly in pixels for `low` and quadratically for `high` (see MEASURED).
     """
     low = high = 0.0
     cold_paid: set[str] = set()
     for step, calls in step_calls(workflow, n_shots).items():
         m = MEASURED[step]
         rate = GPU_USD_PER_SECOND[m["gpu"]]
-        retry = workflow.steps[step].retry
-        attempts = retry.max_attempts if retry else 1
-        worker = workflow.steps[step].model
-        load = 0.0 if worker in cold_paid else m["load_s"] + IDLE_TAIL_S
-        cold_paid.add(worker)
-        low += calls * m["infer_s"] * rate
-        high += (load + calls * attempts * m["infer_s"]) * rate
+        cfg = workflow.steps[step]
+        attempts = cfg.retry.max_attempts if cfg.retry else 1
+        load = 0.0 if cfg.model in cold_paid else m["load_s"] + IDLE_TAIL_S
+        cold_paid.add(cfg.model)
+        scale = cfg.params["width"] * cfg.params["height"] / m["px"] if "px" in m else 1.0
+        low += calls * m["infer_s"] * scale * rate
+        high += (load + calls * attempts * m["infer_s"] * scale**2) * rate
     return {"usd_low": round(low, 3), "usd_high": round(high, 3), "basis": "measured H100 timings, Oct 2026"}

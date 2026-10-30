@@ -237,7 +237,9 @@ castbook/
 - [x] ffmpeg stitch (concat, no re-encode)
 - [ ] Shot planner (Claude) → typed shot specs. Needs an Anthropic API key; scripts are hand-written for now
 - [x] Minimum face size: frames with a face narrower than 64 px are *unverifiable*, not *fail* (`keyframe_i2v@2`; re-judged on CPU, the M2 wide shot's false fails became *unverifiable*)
-- [ ] Re-prompt by reason: a *small*-face verdict should ask for tighter framing, not a frontal face; or render clips at 720p (faces shrink by a third from the 1248×720 keyframe to the 832×480 clip)
+- [x] Re-prompt by reason (`reprompt_by_cause`) and a 720p clip arm (`keyframe_flf@2`, `@3`): the re-prompt can't move a face pinned by both FLF keyframes; 720p made s1 scorable (it fails, p10 0.44) at 3.6× clip cost; VAE tiled above 480p after an OOM
+- [ ] Size-aware gate: is s1's 0.44 at ~80 px drift or face size? Calibrate p10 against face width on labeled frames before trusting verdicts on wide shots
+- [ ] Small-face fix upstream: when a clip is *small*, re-make the keyframe tighter (cross-step retry) instead of re-prompting the clip
 - [x] FastAPI: characters, runs, status, cancel, result, estimate; idempotency keys; billing block; bearer auth (tested locally; not deployed)
 - [ ] Retry policy:
   - transient (Modal retries), 429/5xx (backoff), OOM (drop resolution)
