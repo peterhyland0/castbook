@@ -43,7 +43,11 @@ class IdentityScore:
     `occluded_rate` is the share of frames where a hand covers enough of the
     face box that the embedding no longer describes the face; those frames are
     excluded the same way. The two rates can overlap: a frame can be both
-    turned away and covered. `n_scored` is how many frames the stats are computed
+    turned away and covered. `small_rate` is the share of frames whose face box
+    is narrower than `min_face_px`: ArcFace aligns faces to 112 px, so a 55 px
+    face in a wide shot is upscaled and scores low for the right person (M2
+    run: 55 px -> 0.33, 80 px -> 0.52, 135 px -> 0.57). Small faces are not
+    scored either. `n_scored` is how many frames the stats are computed
     over; when it is 0 the clip is unscorable, which is not the same as failing.
     """
 
@@ -56,6 +60,8 @@ class IdentityScore:
     occluded_rate: float = 0.0
     n_scored: int = 0
     max_yaw: float | None = None
+    small_rate: float = 0.0
+    min_face_px: float | None = None
 
     @property
     def coverage(self) -> float:
@@ -76,6 +82,15 @@ def is_occluded(hand_overlap: float | None, max_hand_overlap: float | None) -> b
 Box = tuple[float, float, float, float]  # x1, y1, x2, y2 in pixels
 
 
+def face_px(face_box: Box | None) -> float | None:
+    """Face size as the detector box width in pixels."""
+    return None if face_box is None else face_box[2] - face_box[0]
+
+
+def is_small(width: float | None, min_face_px: float | None) -> bool:
+    return width is not None and min_face_px is not None and width < min_face_px
+
+
 def overlap_fraction(face: Box, other: Box) -> float:
     """Share of the face box covered by `other` (0..1)."""
     w = min(face[2], other[2]) - max(face[0], other[0])
@@ -90,11 +105,17 @@ def frame_status(
     hand_overlap: float | None,
     max_yaw: float | None,
     max_hand_overlap: float | None,
+    width: float | None = None,
+    min_face_px: float | None = None,
 ) -> str:
-    """Why a frame is or isn't scored. Order matters: a turned-away face that is
-    also covered reads as "profile", since turning away is the bigger effect."""
+    """Why a frame is or isn't scored. Order matters: a face too small to embed
+    reads as "small" whatever its pose (yaw is unreliable at that size too), and a
+    turned-away face that is also covered reads as "profile", since turning away
+    is the bigger effect."""
     if not has_face:
         return "no_face"
+    if is_small(width, min_face_px):
+        return "small"
     if is_profile(yaw, max_yaw):
         return "profile"
     if is_occluded(hand_overlap, max_hand_overlap):
@@ -109,6 +130,8 @@ def score_frames(
     max_yaw: float | None = None,
     hand_overlaps: list[float | None] | None = None,
     max_hand_overlap: float | None = None,
+    widths: list[float | None] | None = None,
+    min_face_px: float | None = None,
 ) -> IdentityScore:
     """`frame_embeddings[i]` is None when no face was detected in frame i.
 
@@ -116,15 +139,18 @@ def score_frames(
     `max_yaw` set, frames turned further than that are counted but not scored.
     `hand_overlaps[i]` is the share of the face box covered by a hand; with
     `max_hand_overlap` set, frames above it are counted as occluded, not scored.
+    `widths[i]` is the face box width in pixels; with `min_face_px` set, narrower
+    faces are counted as small, not scored.
     """
     n = len(frame_embeddings)
     yaws = yaws if yaws is not None else [None] * n
     hand_overlaps = hand_overlaps if hand_overlaps is not None else [None] * n
-    if len(yaws) != n or len(hand_overlaps) != n:
-        raise ValueError("yaws and hand_overlaps must align with frame_embeddings")
+    widths = widths if widths is not None else [None] * n
+    if len(yaws) != n or len(hand_overlaps) != n or len(widths) != n:
+        raise ValueError("yaws, hand_overlaps and widths must align with frame_embeddings")
     statuses = [
-        frame_status(e is not None, y, h, max_yaw, max_hand_overlap)
-        for e, y, h in zip(frame_embeddings, yaws, hand_overlaps, strict=True)
+        frame_status(e is not None, y, h, max_yaw, max_hand_overlap, w, min_face_px)
+        for e, y, h, w in zip(frame_embeddings, yaws, hand_overlaps, widths, strict=True)
     ]
     sims = [cosine(reference, e) for e, st in zip(frame_embeddings, statuses, strict=True) if st == "scored"]
     common = {
@@ -140,6 +166,8 @@ def score_frames(
         else 0.0,
         "n_scored": len(sims),
         "max_yaw": max_yaw,
+        "small_rate": statuses.count("small") / n if n else 0.0,
+        "min_face_px": min_face_px,
     }
     if not sims:
         return IdentityScore(min=None, p10=None, mean=None, **common)
@@ -184,6 +212,8 @@ def verdict(score: IdentityScore, gate: GateConfig) -> Verdict:
             reasons.append(f"{score.profile_rate:.0%} profile")
         if score.occluded_rate:
             reasons.append(f"{score.occluded_rate:.0%} face covered by a hand")
+        if score.small_rate:
+            reasons.append(f"{score.small_rate:.0%} face narrower than {score.min_face_px:.0f} px")
         if score.face_rate < 1:
             reasons.append(f"{1 - score.face_rate:.0%} no face detected")
         return Verdict(status="unverifiable", reasons=tuple(reasons), **common)

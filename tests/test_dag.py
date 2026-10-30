@@ -3,7 +3,7 @@ import threading
 
 import pytest
 
-from castbook.dag import Executor, StepCache, billing, shot_seed
+from castbook.dag import Executor, StepCache, billing, judge_key, shot_seed
 from castbook.shots import Script, ShotSpec
 from castbook.store import LocalStore
 from castbook.workflow import load_workflow
@@ -36,6 +36,9 @@ class FakeBackend:
         self.rules = rules or {}
         self.fail_on = fail_on or set()
         self.calls = {"keyframe": 0, "clip": 0, "stitch": 0}
+        self.clip_inputs: list[tuple[bytes, bytes | None]] = []  # (first_frame, last_frame) per clip call
+        self.keyframe_refs: list[list[bytes]] = []
+        self.last_frames = 0
         self._lock = threading.Lock()
 
     def _emit(self, kind, prompt, seed):
@@ -46,10 +49,19 @@ class FakeBackend:
         return json.dumps({"kind": kind, "prompt": prompt, "seed": seed}).encode(), dict(TIMING)
 
     def keyframe(self, refs, prompt, seed, params):
+        with self._lock:
+            self.keyframe_refs.append(refs)
         return self._emit("keyframe", prompt, seed)
 
-    def clip(self, first_frame, prompt, seed, params):
+    def clip(self, first_frame, prompt, seed, params, last_frame=None):
+        with self._lock:
+            self.clip_inputs.append((first_frame, last_frame))
         return self._emit("clip", prompt, seed)
+
+    def last_frame(self, video):
+        with self._lock:
+            self.last_frames += 1
+        return b"last-of:" + video, {**TIMING, "gpu": "CPU", "usd": 0.0}
 
     def _judge(self, data):
         d = json.loads(data)
@@ -67,14 +79,19 @@ class FakeBackend:
         return b"|".join(clips), {**TIMING, "gpu": "CPU", "usd": 0.0}
 
 
-def _script(n=3, seed=11):
+def _script(n=3, seed=11, end=False):
     return Script(
-        character="c01", seed=seed, shots=[ShotSpec(id=f"s{i}", keyframe=f"kf {i}", motion=f"mv {i}") for i in range(n)]
+        character="c01",
+        seed=seed,
+        shots=[
+            ShotSpec(id=f"s{i}", keyframe=f"kf {i}", motion=f"mv {i}", end=f"end {i}" if end else None)
+            for i in range(n)
+        ],
     )
 
 
-def _run(tmp_path, backend, script=None, **kw):
-    ex = Executor(WF, backend, StepCache(LocalStore(tmp_path)), **kw)
+def _run(tmp_path, backend, script=None, wf=WF, **kw):
+    ex = Executor(wf, backend, StepCache(LocalStore(tmp_path)), **kw)
     return ex.run(script or _script(), b"portrait", [1.0, 0.0])
 
 
@@ -168,3 +185,73 @@ def test_billing_sums_by_gpu():
     b = billing([TIMING, {**TIMING, "load_s": 100.0, "cold": True, "usd": 0.12}])
     assert b["gpu_seconds"]["H100"] == pytest.approx(120.0)
     assert b["usd"] == pytest.approx(0.131)
+
+
+def test_hits_still_report_what_the_artifact_cost(tmp_path):
+    _run(tmp_path, FakeBackend(), _script(1))
+    r = _run(tmp_path, FakeBackend(), _script(1))
+    a = r.shots[0].clip_attempts[0]
+    assert a.cache == "hit" and a.timing["infer_s"] == TIMING["infer_s"]
+
+
+def test_judge_key_ignores_unset_settings():
+    cfg = {"sample_every": 4, "max_yaw": 45}
+    wf1 = Executor(WF, FakeBackend(), StepCache(LocalStore("/nonexistent"))).judge_cfg
+    assert "min_face_px" not in wf1  # @1 predates min_face_px, so its judge keys are unchanged
+    wf2 = Executor(load_workflow("keyframe_i2v@2"), FakeBackend(), StepCache(LocalStore("/nonexistent"))).judge_cfg
+    assert wf2["min_face_px"] == 64
+    assert judge_key(cfg, "k") != judge_key({**cfg, "min_face_px": 64}, "k")
+
+
+def test_i2v_v2_reuses_v1_generations(tmp_path):
+    _run(tmp_path, FakeBackend(), _script(2))
+    b = FakeBackend()
+    r = _run(tmp_path, b, _script(2), wf=load_workflow("keyframe_i2v@2"))
+    assert b.calls == {"keyframe": 0, "clip": 0, "stitch": 0}  # same generations, re-judged only
+    assert r.final_key is not None
+
+
+def test_flf_makes_an_end_keyframe_from_start_plus_portrait(tmp_path):
+    wf = load_workflow("keyframe_flf@1")
+    b = FakeBackend()
+    r = _run(tmp_path, b, _script(2, end=True), wf=wf)
+    assert [s.status for s in r.shots] == ["pass", "pass"]
+    assert b.calls == {"keyframe": 4, "clip": 2, "stitch": 1}
+    for shot in r.shots:
+        assert shot.end_keyframe_key and shot.end_keyframe_attempts[0].prompt.startswith("Picture 1 a few seconds")
+    start = LocalStore(tmp_path).get(r.shots[0].keyframe_key).data
+    assert [b"portrait"] in b.keyframe_refs and [start, b"portrait"] in b.keyframe_refs
+    assert all(last is not None for _, last in b.clip_inputs)
+
+
+def test_flf_gate_covers_the_end_keyframe(tmp_path):
+    def rule(prompt, seed):
+        return _verdict("fail", 0.3) if "a few seconds" in prompt else _verdict("pass")
+
+    b = FakeBackend(rules={"keyframe": rule})
+    r = _run(tmp_path, b, _script(1, end=True), wf=load_workflow("keyframe_flf@1"))
+    assert len(r.shots[0].end_keyframe_attempts) == 3 and r.shots[0].status == "degraded"
+
+
+def test_flf_rejects_scripts_without_end_prompts(tmp_path):
+    with pytest.raises(ValueError, match="end"):
+        _run(tmp_path, FakeBackend(), _script(2), wf=load_workflow("keyframe_flf@1"))
+
+
+def test_lastframe_chain_starts_each_shot_from_the_previous_clip(tmp_path):
+    b = FakeBackend()
+    r = _run(tmp_path, b, _script(3), wf=load_workflow("lastframe_chain@1"))
+    assert [s.status for s in r.shots] == ["pass"] * 3
+    assert b.calls == {"keyframe": 1, "clip": 3, "stitch": 1} and b.last_frames == 2
+    store = LocalStore(tmp_path)
+    for prev, shot in zip(r.shots, r.shots[1:], strict=False):
+        assert not shot.keyframe_attempts
+        assert store.get(shot.keyframe_key).data == b"last-of:" + store.get(prev.clip_key).data
+    assert all(last is None for _, last in b.clip_inputs)
+
+
+def test_lastframe_chain_stops_after_a_shot_with_no_clip(tmp_path):
+    b = FakeBackend(fail_on={("clip", shot_seed(11, 1, 0))})
+    r = _run(tmp_path, b, _script(3), wf=load_workflow("lastframe_chain@1"))
+    assert [s.status for s in r.shots] == ["pass", "error", "error"]
+    assert "previous shot" in r.shots[2].error and r.final_key is not None

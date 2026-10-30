@@ -54,9 +54,13 @@ GPU_USD_PER_SECOND: dict[str, float] = {
     "CPU": 0.0000131,  # ~1 physical core
 }
 
-# Measured step timings from the first single-shot run (H100, 4-step Lightning). Used to price runs before
-# they start; update when the workers or settings change.
+# Measured step timings (H100, 4-step Lightning): cold loads and warm inference from the M2 cafe_morning run
+# (Oct 2026). Used to price runs before they start; update when the workers or settings change. The end keyframe
+# is the same Qwen edit with two refs, and a first-last-frame clip is the same Wan call, so they share timings.
 MEASURED: dict[str, dict] = {
-    "keyframe": {"gpu": "H100", "load_s": 56.7, "infer_s": 5.4},
-    "clip": {"gpu": "H100", "load_s": 227.2, "infer_s": 22.4},
+    "keyframe": {"gpu": "H100", "load_s": 43.4, "infer_s": 2.4},
+    "end_keyframe": {"gpu": "H100", "load_s": 43.4, "infer_s": 2.4},
+    "clip": {"gpu": "H100", "load_s": 198.2, "infer_s": 19.8},
 }
+# Each GPU worker stays up this long after its last call (scaledown_window) and Modal bills that idle time.
+IDLE_TAIL_S = 120

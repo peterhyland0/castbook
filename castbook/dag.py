@@ -1,11 +1,16 @@
-"""Multi-shot DAG executor.
+"""Multi-shot DAG executor. The workflow's `mode` picks the graph:
 
-    portrait ─┬─ keyframe(s1) ── clip(s1) ─┐
-              ├─ keyframe(s2) ── clip(s2) ─┼─ stitch
-              └─ keyframe(s3) ── clip(s3) ─┘
+    keyframe_i2v       portrait ─┬─ keyframe(s1) ── clip(s1) ─┐
+                                 ├─ keyframe(s2) ── clip(s2) ─┼─ stitch
+                                 └─ keyframe(s3) ── clip(s3) ─┘
 
-Shots are independent chains, so they run in parallel (bounded by
-`max_parallel`); the stitch waits for all of them. Every model call goes
+    keyframe_flf       portrait ── keyframe(sN) ── end_keyframe(sN) ── clip(sN, first+last) ── stitch
+
+    lastframe_chain    portrait ── keyframe(s1) ── clip(s1) ── last_frame ── clip(s2) ── last_frame ── … ── stitch
+
+In the keyframe modes shots are independent chains, so they run in parallel
+(bounded by `max_parallel`); in lastframe_chain each shot waits for the one
+before it. The stitch waits for all of them. Every model call goes
 through a content-addressed cache, so re-running a request replays finished
 attempts for free and only computes what's missing: resume after a crash and
 cheap single-shot edits come from the same mechanism.
@@ -45,7 +50,10 @@ class Backend(Protocol):
     """The GPU (and ffmpeg) work a run needs. Each call returns bytes plus a timing dict."""
 
     def keyframe(self, refs: list[bytes], prompt: str, seed: int, params: dict) -> tuple[bytes, dict]: ...
-    def clip(self, first_frame: bytes, prompt: str, seed: int, params: dict) -> tuple[bytes, dict]: ...
+    def clip(
+        self, first_frame: bytes, prompt: str, seed: int, params: dict, last_frame: bytes | None = None
+    ) -> tuple[bytes, dict]: ...
+    def last_frame(self, video: bytes) -> tuple[bytes, dict]: ...
     def score_image(self, reference: list[float], image: bytes, judge: dict) -> dict: ...
     def score_video(self, reference: list[float], video: bytes, judge: dict) -> dict: ...
     def stitch(self, clips: list[bytes], params: dict) -> tuple[bytes, dict]: ...
@@ -61,7 +69,7 @@ class Attempt:
     cache: str  # hit | miss
     verdict: dict
     score: dict
-    timing: dict | None
+    timing: dict | None  # what producing this artifact cost; on a hit, the cost recorded when it was made
 
     @property
     def rank(self) -> tuple[int, float]:
@@ -74,8 +82,10 @@ class ShotResult:
     shot_id: str
     status: str = "pending"  # pending | running | pass | degraded | cancelled | error
     keyframe_attempts: list[Attempt] = field(default_factory=list)
+    end_keyframe_attempts: list[Attempt] = field(default_factory=list)
     clip_attempts: list[Attempt] = field(default_factory=list)
-    keyframe_key: str | None = None
+    keyframe_key: str | None = None  # the clip's first frame: a keyframe, or the previous clip's last frame
+    end_keyframe_key: str | None = None
     clip_key: str | None = None
     error: str | None = None
 
@@ -100,6 +110,22 @@ class RunResult:
         d = asdict(self)
         d["gpu_usd"] = self.gpu_usd
         return d
+
+
+def judge_key(judge_cfg: dict, artifact_key: str) -> str:
+    """Judge results are keyed by artifact + judge settings, so changing the judge re-scores without regenerating."""
+    return step_key("judge", "arcface+hands", "1", judge_cfg, [artifact_key], 0)
+
+
+def judge_config(workflow: Workflow) -> dict:
+    # exclude_none keeps judge keys stable for workflows written before a setting existed
+    return workflow.steps["judge"].model_dump(
+        include={"sample_every", "max_yaw", "max_hand_overlap", "min_face_px", "gate"}, exclude_none=True
+    )
+
+
+def best(attempts: list[Attempt]) -> Attempt:
+    return max(attempts, key=lambda a: a.rank)
 
 
 def shot_seed(base: int, shot_index: int, attempt: int) -> int:
@@ -156,9 +182,7 @@ class Executor:
         self.max_parallel = max_parallel
         self.on_event = on_event
         self.should_cancel = should_cancel
-        self.judge_cfg = workflow.steps["judge"].model_dump(
-            include={"sample_every", "max_yaw", "max_hand_overlap", "gate"}
-        )
+        self.judge_cfg = judge_config(workflow)
 
     def _check_cancel(self) -> None:
         if self.should_cancel():
@@ -190,8 +214,8 @@ class Executor:
                 {"step": step, "model": cfg.model, "params": params, "inputs": inputs, "seed": seed},
                 lambda prompt=prompt, seed=seed: generate(prompt, seed),
             )
-            judge_key = step_key("judge", "arcface+hands", "1", self.judge_cfg, [key], 0)
-            result = self.cache.judged(judge_key, lambda art=art: judge(art.data))
+            timing = timing or art.meta.get("timing")
+            result = self.cache.judged(judge_key(self.judge_cfg, key), lambda art=art: judge(art.data))
             attempt = Attempt(step, n, seed, prompt, key, cache, result["verdict"], result["score"], timing)
             attempts.append(attempt)
             self.on_event({"type": "attempt", "step": step, "shot_index": shot_index, **_brief(attempt)})
@@ -203,38 +227,76 @@ class Executor:
                 reprompts += 1
         return attempts
 
-    def _run_shot(self, i: int, shot: ShotSpec, portrait: bytes, portrait_sha: str, reference: list[float], seed: int):
+    def _run_shot(
+        self,
+        i: int,
+        shot: ShotSpec,
+        portrait: bytes,
+        portrait_sha: str,
+        reference: list[float],
+        seed: int,
+        first: tuple[str, bytes] | None = None,
+    ) -> ShotResult:
+        """One shot. `first` is (key, png) of a given first frame (lastframe_chain); otherwise a keyframe is made."""
         result = ShotResult(shot.id, status="running")
         self.on_event({"type": "shot", "shot_id": shot.id, "status": "running"})
+        store = self.cache.store
+
+        def score_image(data: bytes) -> dict:
+            return self.backend.score_image(reference, data, self.judge_cfg)
+
         try:
-            kf_params = self.wf.steps["keyframe"].params
-            result.keyframe_attempts = self._attempts(
-                "keyframe",
-                i,
-                seed,
-                shot.keyframe,
-                [portrait_sha],
-                lambda p, s: self.backend.keyframe([portrait], p, s, kf_params),
-                lambda data: self.backend.score_image(reference, data, self.judge_cfg),
-                "keyframe.png",
-            )
-            best_kf = max(result.keyframe_attempts, key=lambda a: a.rank)
-            result.keyframe_key = best_kf.key
-            kf_bytes = self.cache.store.get(best_kf.key).data
+            gated: list[Attempt] = []
+            if first is None:
+                kf_params = self.wf.steps["keyframe"].params
+                result.keyframe_attempts = self._attempts(
+                    "keyframe",
+                    i,
+                    seed,
+                    shot.keyframe,
+                    [portrait_sha],
+                    lambda p, s: self.backend.keyframe([portrait], p, s, kf_params),
+                    score_image,
+                    "keyframe.png",
+                )
+                gated.append(best(result.keyframe_attempts))
+                result.keyframe_key = gated[-1].key
+                start = store.get(result.keyframe_key).data
+            else:
+                result.keyframe_key, start = first
+
+            end = None
+            if self.wf.mode == "keyframe_flf":
+                end_params = self.wf.steps["end_keyframe"].params
+                result.end_keyframe_attempts = self._attempts(
+                    "end_keyframe",
+                    i,
+                    seed,
+                    end_params["prompt_template"].format(end=shot.end),
+                    [result.keyframe_key, portrait_sha],
+                    lambda p, s: self.backend.keyframe([start, portrait], p, s, end_params),
+                    score_image,
+                    "end_keyframe.png",
+                )
+                gated.append(best(result.end_keyframe_attempts))
+                result.end_keyframe_key = gated[-1].key
+                end = store.get(result.end_keyframe_key).data
+
             clip_params = self.wf.steps["clip"].params
+            inputs = [k for k in (result.keyframe_key, result.end_keyframe_key) if k]
             result.clip_attempts = self._attempts(
                 "clip",
                 i,
                 seed,
                 shot.motion,
-                [best_kf.key],
-                lambda p, s: self.backend.clip(kf_bytes, p, s, clip_params),
+                inputs,
+                lambda p, s: self.backend.clip(start, p, s, clip_params, end),
                 lambda data: self.backend.score_video(reference, data, self.judge_cfg),
                 "clip.mp4",
             )
-            best_clip = max(result.clip_attempts, key=lambda a: a.rank)
-            result.clip_key = best_clip.key
-            result.status = "pass" if best_kf.verdict["status"] == best_clip.verdict["status"] == "pass" else "degraded"
+            gated.append(best(result.clip_attempts))
+            result.clip_key = gated[-1].key
+            result.status = "pass" if all(a.verdict["status"] == "pass" for a in gated) else "degraded"
         except Cancelled:
             result.status = "cancelled"
         except Exception as e:  # noqa: BLE001 - one shot's failure is recorded, the run continues
@@ -242,15 +304,47 @@ class Executor:
         self.on_event({"type": "shot", "shot_id": shot.id, "status": result.status})
         return result
 
+    def _last_frame(self, clip_key: str) -> tuple[str, bytes]:
+        key = step_key("last_frame", "ffmpeg", "1", {}, [clip_key], 0)
+        clip = self.cache.store.get(clip_key).data
+        art, _, _ = self.cache.get_or_compute(
+            key, "last_frame.png", {"step": "last_frame", "inputs": [clip_key]}, lambda: self.backend.last_frame(clip)
+        )
+        return art.key, art.data
+
+    def _run_chain(self, script: Script, portrait: bytes, portrait_sha: str, reference: list[float]):
+        """lastframe_chain: strictly sequential, each shot starts where the previous clip ended."""
+        shots: list[ShotResult] = []
+        first = None
+        for i, shot in enumerate(script.shots):
+            if shots and shots[-1].clip_key is None:
+                shots.append(ShotResult(shot.id, status="error", error="previous shot produced no clip to continue"))
+                continue
+            if shots:
+                try:
+                    first = self._last_frame(shots[-1].clip_key)
+                except Exception as e:  # noqa: BLE001
+                    shots.append(ShotResult(shot.id, status="error", error=f"last_frame: {type(e).__name__}: {e}"))
+                    continue
+            shots.append(self._run_shot(i, shot, portrait, portrait_sha, reference, script.seed, first))
+        return shots
+
     def run(self, script: Script, portrait: bytes, reference: list[float]) -> RunResult:
         t0 = time.perf_counter()
+        if self.wf.mode == "keyframe_flf":
+            missing = [s.id for s in script.shots if not s.end]
+            if missing:
+                raise ValueError(f"{self.wf.ref} needs an `end` prompt on every shot; missing on {missing}")
         portrait_sha = sha256_bytes(portrait)
-        with ThreadPoolExecutor(max_workers=self.max_parallel) as pool:
-            futures = [
-                pool.submit(self._run_shot, i, shot, portrait, portrait_sha, reference, script.seed)
-                for i, shot in enumerate(script.shots)
-            ]
-            shots = [f.result() for f in futures]
+        if self.wf.mode == "lastframe_chain":
+            shots = self._run_chain(script, portrait, portrait_sha, reference)
+        else:
+            with ThreadPoolExecutor(max_workers=self.max_parallel) as pool:
+                futures = [
+                    pool.submit(self._run_shot, i, shot, portrait, portrait_sha, reference, script.seed)
+                    for i, shot in enumerate(script.shots)
+                ]
+                shots = [f.result() for f in futures]
 
         final_key = None
         usable = [s for s in shots if s.clip_key]

@@ -1,7 +1,7 @@
 """Versioned workflow configs (workflows/<id>@<version>.yaml)."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict
@@ -32,14 +32,23 @@ class StepConfig(BaseModel):
     sample_every: int | None = None
     max_yaw: float | None = None
     max_hand_overlap: float | None = None
+    min_face_px: float | None = None
     gate: dict[str, Any] | None = None
     retry: RetryPolicy | None = None
+
+
+# How shots are conditioned (see dag.py):
+#   keyframe_i2v     one keyframe per shot from the portrait, then image-to-video from it
+#   keyframe_flf     start and end keyframes per shot, then first-last-frame video between them
+#   lastframe_chain  shot 1 as keyframe_i2v; every later shot starts from the previous clip's last frame
+Mode = Literal["keyframe_i2v", "keyframe_flf", "lastframe_chain"]
 
 
 class Workflow(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     version: int
+    mode: Mode = "keyframe_i2v"
     steps: dict[str, StepConfig]
 
     @property

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import modal
 
-from castbook.identity import GateConfig, frame_status, overlap_fraction, score_frames, verdict
+from castbook.identity import GateConfig, face_px, frame_status, overlap_fraction, score_frames, verdict
 from castbook.workers.common import MODELS_DIR, TimedWorker, app, judge_image, models_vol
 
 HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
@@ -103,7 +103,7 @@ class Judge(TimedWorker):
     def _gate(gate: dict | None) -> GateConfig:
         return GateConfig(**(gate or {}))
 
-    def _summarize(self, reference, observations, max_yaw, max_hand_overlap, gate) -> dict:
+    def _summarize(self, reference, observations, max_yaw, max_hand_overlap, gate, min_face_px=None) -> dict:
         import numpy as np
 
         ref = np.array(reference)
@@ -114,15 +114,18 @@ class Judge(TimedWorker):
             max_yaw,
             [o.get("hand_overlap") for o in observations],
             max_hand_overlap,
+            [face_px(o.get("face_box")) for o in observations],
+            min_face_px,
         )
         return {"score": score.to_dict(), "verdict": verdict(score, self._gate(gate)).to_dict()}
 
     @staticmethod
-    def _frame_record(index, obs, reference, max_yaw, max_hand_overlap) -> dict:
-        from castbook.identity import cosine, is_occluded, is_profile
+    def _frame_record(index, obs, reference, max_yaw, max_hand_overlap, min_face_px=None) -> dict:
+        from castbook.identity import cosine, is_occluded, is_profile, is_small
 
         emb = obs["embedding"]
         has_face = emb is not None
+        width = face_px(obs.get("face_box"))
         return {
             "frame": index,
             "sim": round(cosine(reference, emb), 4) if has_face else None,
@@ -135,7 +138,11 @@ class Judge(TimedWorker):
             "emb_norm": round(obs["emb_norm"], 2) if has_face else None,
             "profile": has_face and is_profile(obs.get("yaw"), max_yaw),
             "occluded": has_face and is_occluded(obs.get("hand_overlap"), max_hand_overlap),
-            "status": frame_status(has_face, obs.get("yaw"), obs.get("hand_overlap"), max_yaw, max_hand_overlap),
+            "face_px": round(width) if width is not None else None,
+            "small": has_face and is_small(width, min_face_px),
+            "status": frame_status(
+                has_face, obs.get("yaw"), obs.get("hand_overlap"), max_yaw, max_hand_overlap, width, min_face_px
+            ),
         }
 
     @modal.method()
@@ -158,13 +165,14 @@ class Judge(TimedWorker):
         max_yaw: float | None = None,
         max_hand_overlap: float | None = None,
         gate: dict | None = None,
+        min_face_px: float | None = None,
     ) -> dict:
         import numpy as np
 
         t0 = time.perf_counter()
         obs = self._observe_bytes(image)
-        out = self._summarize(reference, [obs], max_yaw, max_hand_overlap, gate)
-        out["frame"] = self._frame_record(0, obs, np.array(reference), max_yaw, max_hand_overlap)
+        out = self._summarize(reference, [obs], max_yaw, max_hand_overlap, gate, min_face_px)
+        out["frame"] = self._frame_record(0, obs, np.array(reference), max_yaw, max_hand_overlap, min_face_px)
         out["timing"] = self._timing(time.perf_counter() - t0)
         return out
 
@@ -177,6 +185,7 @@ class Judge(TimedWorker):
         max_yaw: float | None = None,
         max_hand_overlap: float | None = None,
         gate: dict | None = None,
+        min_face_px: float | None = None,
     ) -> dict:
         import imageio.v3 as iio
         import numpy as np
@@ -191,9 +200,10 @@ class Judge(TimedWorker):
             sampled.append(len(frames) - 1)  # always judge the last frame: the next shot starts there
         observations = [self._observe(frames[i]) for i in sampled]
         ref = np.array(reference)
-        out = self._summarize(reference, observations, max_yaw, max_hand_overlap, gate)
+        out = self._summarize(reference, observations, max_yaw, max_hand_overlap, gate, min_face_px)
         out["per_frame"] = [
-            self._frame_record(i, o, ref, max_yaw, max_hand_overlap) for i, o in zip(sampled, observations, strict=True)
+            self._frame_record(i, o, ref, max_yaw, max_hand_overlap, min_face_px)
+            for i, o in zip(sampled, observations, strict=True)
         ]
         out["timing"] = self._timing(time.perf_counter() - t0)
         return out

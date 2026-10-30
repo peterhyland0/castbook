@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from castbook.config import GPU_USD_PER_SECOND, MEASURED
+from castbook.config import GPU_USD_PER_SECOND, IDLE_TAIL_S, MEASURED
 from castbook.shots import Script
 from castbook.state import StateStore
 from castbook.workflow import Workflow
@@ -93,18 +93,32 @@ def is_cancel_requested(state: StateStore, request_id: str) -> bool:
     return bool(state.get("cancel", request_id))
 
 
+def step_calls(workflow: Workflow, n_shots: int) -> dict[str, int]:
+    """First-try model calls per step for an n-shot script under the workflow's mode."""
+    keyframes = 1 if workflow.mode == "lastframe_chain" else n_shots
+    calls = {"keyframe": keyframes, "clip": n_shots}
+    if workflow.mode == "keyframe_flf":
+        calls["end_keyframe"] = n_shots
+    return calls
+
+
 def estimate(workflow: Workflow, n_shots: int) -> dict:
     """Price a run before it starts, from measured warm/cold step timings.
 
     `low` assumes warm containers and every step passing first time; `high`
-    assumes cold starts and every attempt the retry policy allows.
+    assumes a cold start per GPU worker (keyframe and end_keyframe share one),
+    every attempt the retry policy allows, and the idle tail before scaledown.
     """
     low = high = 0.0
-    for step in ("keyframe", "clip"):
+    cold_paid: set[str] = set()
+    for step, calls in step_calls(workflow, n_shots).items():
         m = MEASURED[step]
         rate = GPU_USD_PER_SECOND[m["gpu"]]
         retry = workflow.steps[step].retry
         attempts = retry.max_attempts if retry else 1
-        low += n_shots * m["infer_s"] * rate
-        high += (m["load_s"] + n_shots * attempts * m["infer_s"]) * rate
+        worker = workflow.steps[step].model
+        load = 0.0 if worker in cold_paid else m["load_s"] + IDLE_TAIL_S
+        cold_paid.add(worker)
+        low += calls * m["infer_s"] * rate
+        high += (load + calls * attempts * m["infer_s"]) * rate
     return {"usd_low": round(low, 3), "usd_high": round(high, 3), "basis": "measured H100 timings, Oct 2026"}

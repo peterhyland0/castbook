@@ -1,7 +1,16 @@
 import numpy as np
 import pytest
 
-from castbook.identity import character_embedding, cosine, score_frames
+from castbook.identity import (
+    GateConfig,
+    character_embedding,
+    cosine,
+    face_px,
+    frame_status,
+    is_small,
+    score_frames,
+    verdict,
+)
 
 
 def _unit(*xs):
@@ -109,3 +118,24 @@ def test_verdicts():
 def test_profile_and_occlusion_rates_can_overlap():
     s = score_frames(_unit(1, 0), [_unit(1, 0)] * 2, [80.0, 0.0], 45, [0.9, 0.0], 0.2)
     assert s.profile_rate == pytest.approx(0.5) and s.occluded_rate == pytest.approx(0.5) and s.n_scored == 1
+
+
+def test_small_faces_are_not_scored():
+    ref = np.array([1.0, 0.0])
+    embs = [np.array([1.0, 0.0]), np.array([0.3, 1.0]), np.array([0.3, 1.0])]
+    s = score_frames(ref, embs, widths=[120, 55, 60], min_face_px=64)
+    assert s.n_scored == 1 and s.small_rate == pytest.approx(2 / 3) and s.p10 == pytest.approx(1.0)
+    assert verdict(s, GateConfig()).status == "unverifiable"
+    assert any("narrower than 64 px" in r for r in verdict(s, GateConfig()).reasons)
+
+
+def test_min_face_px_unset_scores_everything():
+    ref = np.array([1.0, 0.0])
+    s = score_frames(ref, [np.array([1.0, 0.0])], widths=[10])
+    assert s.n_scored == 1 and s.small_rate == 0
+
+
+def test_small_takes_precedence_over_profile():
+    assert frame_status(True, 80, None, 45, None, 40, 64) == "small"
+    assert frame_status(True, 80, None, 45, None, 100, 64) == "profile"
+    assert face_px((10, 0, 74, 80)) == 64 and not is_small(64, 64) and is_small(63.9, 64)

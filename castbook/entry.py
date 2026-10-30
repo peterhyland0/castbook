@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from castbook.config import MODELS
-from castbook.multishot import fetch_artifacts, run_request
+from castbook.multishot import fetch_artifacts, rejudge, run_request
 from castbook.pipeline import make_golden, single_shot
 from castbook.viewer import render_index, render_run
 from castbook.workers.common import app
@@ -107,13 +107,21 @@ def multishot(script: str = "evals/scripts/cafe_morning.yaml", workflow: str = "
     final = state.get("runs", rid)
 
     out = OUT / "multi" / rid
+    _download(result, final, out)
+    print(f"saved to {out}/")
+
+
+def _download(result: dict, final: dict, out: Path) -> None:
+    """Fetch a run's final video and every attempt's artifact into `out`, and print a per-shot summary."""
     out.mkdir(parents=True, exist_ok=True)
     keys = {"final.mp4": result["final_key"]} if result["final_key"] else {}
     for s in result["shots"]:
-        for a in s["keyframe_attempts"]:
-            keys[f"{s['shot_id']}/keyframe_{a['n']}.png"] = a["key"]
-        for a in s["clip_attempts"]:
-            keys[f"{s['shot_id']}/clip_{a['n']}.mp4"] = a["key"]
+        if s.get("keyframe_key") and not s["keyframe_attempts"]:
+            keys[f"{s['shot_id']}/first_frame.png"] = s["keyframe_key"]  # lastframe_chain: previous clip's end
+        for field, name in (("keyframe", "keyframe"), ("end_keyframe", "end_keyframe"), ("clip", "clip")):
+            ext = "mp4" if field == "clip" else "png"
+            for a in s.get(f"{field}_attempts", []):
+                keys[f"{s['shot_id']}/{name}_{a['n']}.{ext}"] = a["key"]
     blobs = fetch_artifacts.remote([k for k in keys.values() if k])
     for name, key in keys.items():
         if key in blobs:
@@ -121,9 +129,85 @@ def multishot(script: str = "evals/scripts/cafe_morning.yaml", workflow: str = "
             (out / name).write_bytes(blobs[key])
     (out / "record.json").write_text(json.dumps({**result, "run": final}, indent=2, default=str))
 
-    print(f"status={result['status']} gpu_usd={final['billing']['usd']} wall={result['wall_s']}s")
+    print(f"{result['workflow']}: status={result['status']} billed=${final['billing']['usd']} wall={result['wall_s']}s")
     for s in result["shots"]:
-        kf = " ".join(f"{a['verdict']['status']}" for a in s["keyframe_attempts"])
-        cl = " ".join(f"{a['verdict']['status']}" for a in s["clip_attempts"])
-        print(f"  {s['shot_id']}: {s['status']:9} keyframe[{kf}] clip[{cl}] {s['error'] or ''}")
-    print(f"saved to {out}/")
+        steps = []
+        for field in ("keyframe", "end_keyframe", "clip"):
+            if s.get(f"{field}_attempts"):
+                steps.append(f"{field}[{' '.join(a['verdict']['status'] for a in s[f'{field}_attempts'])}]")
+        print(f"  {s['shot_id']}: {s['status']:9} {' '.join(steps)} {s['error'] or ''}")
+
+
+@app.local_entrypoint()
+def scoreboard(
+    script: str = "evals/scripts/cafe_morning.yaml",
+    arms: str = "keyframe_i2v@2,lastframe_chain@1,keyframe_flf@1",
+    max_parallel: int = 3,
+    dry_run: bool = False,
+):
+    """Run one script through several workflow versions, one after another, and render the comparison.
+
+    Arms run sequentially so they don't queue behind each other on the single-container GPU pools, and
+    so each worker stays warm from one arm to the next. --dry-run prints the per-arm estimates only.
+    """
+    from datetime import UTC, datetime
+
+    from castbook.runs import create_run, estimate
+    from castbook.scoreboard import render, summarize
+    from castbook.shots import load_script
+    from castbook.state import ModalDictState
+    from castbook.workflow import load_workflow
+
+    spec = load_script(script)
+    refs = [a.strip() for a in arms.split(",") if a.strip()]
+    for ref in refs:
+        e = estimate(load_workflow(ref), len(spec.shots))
+        print(f"{ref:20} estimate ${e['usd_low']:.3f}-{e['usd_high']:.3f} (no cache hits assumed)")
+    if dry_run:
+        return
+
+    name = f"{Path(script).stem}_{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+    out = OUT / "scoreboard" / name
+    state = ModalDictState()
+    summaries = []
+    for ref in refs:
+        run, _ = create_run(state, load_workflow(ref), spec)
+        result = run_request.remote(run["request_id"], max_parallel)
+        _download(result, state.get("runs", run["request_id"]), out / ref)
+        summaries.append(summarize(result))
+    (out / "summary.json").write_text(json.dumps({"script": spec.model_dump(), "arms": summaries}, indent=2))
+    page = render(out, summaries, spec.model_dump())
+    for a in summaries:
+        print(
+            f"{a['workflow']:20} accepted {a['accepted']}/{a['n_shots']}  first-try {a['first_try']}  "
+            f"min p10 {a['min_p10']}  warm ${a['warm_usd']:.3f}  $/acc-s {a['usd_per_accepted_s']}  "
+            f"billed ${a['billed_usd']:.3f}"
+        )
+    print(f"scoreboard: {page.resolve()}")
+
+
+@app.local_entrypoint()
+def rejudge_run(request_id: str = "req_c5c36ab86736", workflow: str = "keyframe_i2v@2"):
+    """Re-score a finished multishot run's attempts with another workflow's judge (CPU only), old vs new."""
+    out = OUT / "multi" / request_id
+    rec = json.loads((out / "record.json").read_text())
+    old = {}
+    for s in rec["shots"]:
+        for a in s["keyframe_attempts"] + s.get("end_keyframe_attempts", []) + s["clip_attempts"]:
+            old[a["key"]] = {"shot": s["shot_id"], "step": a["step"], "n": a["n"], "verdict": a["verdict"]}
+    results = rejudge.remote([{"key": k, "step": v["step"]} for k, v in old.items()], rec["character"], workflow)
+    for r in results:
+        o = old[r["key"]]
+        was, now = o["verdict"], r["verdict"]
+        print(
+            f"{o['shot']} {o['step']:12} #{o['n']}  {was['status']:12} {_fmt(was['value'])} -> "
+            f"{now['status']:12} {_fmt(now['value'])}  cov {now['coverage']:.0%}  {'; '.join(now['reasons'])}"
+        )
+        frames = r.get("per_frame") or [r.get("frame")]
+        sizes = " ".join(f"{f['face_px']}px:{_fmt(f['sim'])}" for f in frames if f and f.get("face_px"))
+        print(f"      face width:sim  {sizes}")
+    (out / f"rejudge_{workflow}.json").write_text(json.dumps(results, indent=2))
+
+
+def _fmt(v: float | None) -> str:
+    return "  -  " if v is None else f"{v:.2f}"

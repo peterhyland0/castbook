@@ -1,7 +1,8 @@
 """Shot scripts: the typed input to a multi-shot run.
 
 A script names a character and a list of shots, each with a keyframe prompt
-(what the still looks like) and a motion prompt (what happens in the clip).
+(what the still looks like), a motion prompt (what happens in the clip) and,
+for first-last-frame workflows, an end prompt (where the shot ends up).
 For now scripts are written by hand; an LLM planner that turns a one-line idea
 into a script is the next step and will produce this same structure.
 """
@@ -17,6 +18,7 @@ class ShotSpec(BaseModel):
     id: str
     keyframe: str = Field(min_length=1)
     motion: str = Field(min_length=1)
+    end: str | None = Field(default=None, min_length=1)
 
 
 class Script(BaseModel):

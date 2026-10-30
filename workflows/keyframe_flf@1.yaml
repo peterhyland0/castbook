@@ -1,0 +1,55 @@
+# Keyframes at both ends of every shot: a start keyframe from the portrait (as keyframe_i2v@2), an end keyframe
+# edited from the start keyframe plus the portrait, then Wan 2.2 first-last-frame video between them. Identity
+# is pinned at both ends, so mid-clip drift has less room. Needs an `end` prompt on every shot.
+id: keyframe_flf
+version: 1
+mode: keyframe_flf
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+    retry:
+      max_attempts: 3          # keyframes are cheap (~5 s warm), so re-roll freely
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+  end_keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+      # refs are [start keyframe, portrait]; Qwen-Image-Edit-Plus numbers them Picture 1 and Picture 2
+      prompt_template: >-
+        Picture 1 a few seconds later: {end} Keep the same location, camera angle, lighting and outfit as
+        Picture 1, and the same face as Picture 2. Cinematic 16:9 still.
+    retry:
+      max_attempts: 3          # keyframes are cheap (~5 s warm), so re-roll freely
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true
+      width: 832
+      height: 480
+      num_frames: 81
+      fps: 16
+    retry:
+      max_attempts: 2          # clips cost ~4x a keyframe, so fewer tries
+      max_reprompts: 1
+      reprompt_suffix: " Keep the face turned toward the camera throughout; hands stay away from the face."
+  judge:
+    sample_every: 4
+    max_yaw: 45
+    max_hand_overlap: 0.15
+    min_face_px: 64            # narrower faces are unverifiable, not fail (provisional until M3 calibration)
+    gate:
+      metric: p10
+      min_score: 0.5
+      min_coverage: 0.5
+  stitch:
+    params:
+      fps: 16

@@ -14,6 +14,8 @@ The plan and motivation are in [PLAN.md](PLAN.md); the background research is in
 - **M2 (in progress):** multi-shot DAG with gate-driven re-rolls and stitching, run on Modal. FastAPI layer built
   and tested locally but not deployed. Run state is a modal.Dict for now (Postgres later); artifacts are still on
   a Modal Volume (GCS later). Not started: LLM shot planner (needs an Anthropic key), moderation gates.
+- **M3 (started):** A/B scoreboard across three chain types (`keyframe_i2v`, `lastframe_chain`, `keyframe_flf`) on
+  one script and one character. The full golden set and threshold calibration are next.
 
 ## First result (2026-10-29, run `20261030T014009-ba3d2d`, character c01)
 
@@ -96,6 +98,38 @@ driving re-rolls, then stitched into one 15 s video. **Succeeded: $0.39 attribut
   start per model pool, because each pool is capped at one container.
 - **Cost split:** $0.27 of the $0.39 is the two cold loads; the eight warm model calls cost $0.12.
 
+## M3 start: 3-arm scoreboard (script `cafe_morning`, character c01, `out/scoreboard/cafe_morning_20261030-181634/`)
+
+The same 3-shot script through three workflow versions, run back to back on Modal. All three use the judge with
+the new minimum face size (`min_face_px: 64`, so narrower faces count as *unverifiable* rather than *fail*).
+
+| Workflow | Accepted | First try | Min p10 | Mean p10 | Attempts | Warm $ | $/accepted s | Billed $ |
+|---|---|---|---|---|---|---|---|---|
+| `keyframe_i2v@2`: keyframe per shot → I2V (Mage Agent's recipe) | 2/3 | 1/3 | 0.50 | 0.53 | 10 | $0.129 | $0.0127 | $0.141 |
+| `lastframe_chain@1`: each shot starts from the previous clip's last frame | **0/3** | 0/3 | – | – | 9 | $0.142 | – | $0.086 |
+| `keyframe_flf@1`: start + end keyframe per shot → first-last-frame video | 2/3 | **2/3** | **0.52** | **0.57** | 12 | **$0.117** | **$0.0116** | $0.159 |
+
+*Warm $* is the inference time of every attempt, whether or not it was a cache hit this run; compare arms on that.
+*Billed $* depends on run order (the first two arms reused cached shot-1 work and the FLF arm paid the keyframe cold
+start). Total billed was $0.39, plus roughly $0.26 of idle time before the workers scaled down.
+
+- **The last-frame chain can't change scenes.** Starting from the street's last frame, shots 2 and 3 never reach the
+  café: in the "café window" shot she holds a cup in the middle of the street. Its faces stay wide-shot small, so
+  nothing could be verified (s3: 38% of frames scorable, p10 0.11). It's the cheapest arm to *bill* only because
+  shot 1 was cached; on warm cost it's the most expensive, and it shipped nothing acceptable.
+- **First-last-frame beat Mage Agent's recipe on this script:** both verifiable shots passed first try (the
+  keyframe arm needed a re-prompt on s2), identity was higher (s3 p10 0.62 vs 0.56), and warm cost per accepted
+  second was 9% lower even with an extra keyframe per shot, because it needed no clip re-roll. This is one character,
+  one seed and two scorable shots, so treat it as a direction, not a result.
+- **Shot 1 is *unverifiable* in every arm, which is correct.** The face is 52–56 px wide in the 832×480 clip. The
+  keyframe for the same shot is 1248×720, where the face is 76–84 px, so the face shrinks by a third between steps.
+  The FLF end keyframe framed her closer, but in the clip the face never got past 64 px (0% scorable). Fixes to
+  try: render clips at 720p, re-prompt *small*-face shots for tighter framing (the current re-prompt only asks for a
+  frontal face), or have the planner avoid wide shots for identity-critical beats.
+- **Re-judging is free of GPU.** `rejudge_run` re-scored the M2 run's stored artifacts with the new judge on CPU:
+  shot 1's two clips went from *fail* (0.24, 0.29) to *unverifiable*, and every other verdict was unchanged. Judge
+  results are cached by artifact + judge settings, so the scoreboard reused them.
+
 ## Layout
 
 ```
@@ -107,7 +141,11 @@ castbook/
   costs.py         GPU-seconds -> $
   workflow.py      versioned workflow configs (workflows/<id>@<version>.yaml)
   adapters/base.py model capability contract + conditioning planner
-  pipeline.py      orchestrator functions (CPU container)
+  pipeline.py      single-shot orchestrator (CPU container)
+  dag.py           multi-shot executor: keyframe_i2v / keyframe_flf / lastframe_chain, gate-driven retries
+  multishot.py     Modal backend, stitch + last-frame steps, run_request, rejudge
+  api.py           FastAPI layer (serve.py deploys it)
+  scoreboard.py    A/B summary + side-by-side HTML page
   entry.py         CLI entrypoints
   workers/         one Modal class per model family
     portrait.py    Z-Image Turbo, L40S
@@ -123,6 +161,9 @@ tests/             unit tests (no GPU needed)
 
 ```bash
 uv sync
+uv run modal run -m castbook.entry::scoreboard --dry-run    # M3: per-arm cost estimates, no GPU
+uv run modal run -m castbook.entry::scoreboard              # M3: 3 arms -> out/scoreboard/<script>_<time>/index.html
+uv run modal run -m castbook.entry::rejudge_run --request-id req_c5c36ab86736   # re-score stored artifacts, CPU only
 uv run modal run -m castbook.entry::multishot --script evals/scripts/cafe_morning.yaml   # M2: -> out/multi/<request_id>/
 uv run pytest -q
 uv run modal run -m castbook.entry::download_weights   # M0: ~215 GB into the castbook-models Volume

@@ -236,7 +236,8 @@ castbook/
 - [x] Identity gate with bounded re-roll (new seed); re-prompt on *unverifiable*; keep best attempt on exhaustion (real run: 1 keyframe re-rolled twice, 1 clip re-prompted to a pass)
 - [x] ffmpeg stitch (concat, no re-encode)
 - [ ] Shot planner (Claude) → typed shot specs. Needs an Anthropic API key; scripts are hand-written for now
-- [ ] Minimum face size: frames with a small face are *unverifiable*, not *fail* (the wide shot scored 0.33 at 55 px for the right person)
+- [x] Minimum face size: frames with a face narrower than 64 px are *unverifiable*, not *fail* (`keyframe_i2v@2`; re-judged on CPU, the M2 wide shot's false fails became *unverifiable*)
+- [ ] Re-prompt by reason: a *small*-face verdict should ask for tighter framing, not a frontal face; or render clips at 720p (faces shrink by a third from the 1248×720 keyframe to the 832×480 clip)
 - [x] FastAPI: characters, runs, status, cancel, result, estimate; idempotency keys; billing block; bearer auth (tested locally; not deployed)
 - [ ] Retry policy:
   - transient (Modal retries), 429/5xx (backoff), OOM (drop resolution)
@@ -247,8 +248,10 @@ castbook/
 
 **M3: A/B harness + scoreboard (2–3 days)**
 - [ ] Calibrate the ArcFace threshold on ~100 hand-labeled shots (same/different); plot it
-- [ ] Run 4 arms × golden set; compute $/accepted-second
-- [ ] Static viewer: run DAG, attempts, scores, side-by-side videos
+- [x] First scoreboard: 3 arms (`keyframe_i2v@2`, `lastframe_chain@1`, `keyframe_flf@1`) × 1 character × 3 shots, $/accepted-second (FLF 2/3 accepted first try at $0.0116/s; last-frame chain 0/3; see README)
+- [ ] Run the arms × the full golden set and several seeds, so the comparison has more than two scorable shots per arm
+- [x] Static scoreboard page: metrics table, side-by-side final videos, per-shot verdicts (`castbook/scoreboard.py`)
+- [ ] Viewer for one multi-shot run: DAG, every attempt, per-frame identity
 
 **M4: Model onboarding + infra numbers (2 days)**
 - [ ] `ModelAdapter` capability contract: `max_refs`, `refs_xor_first_frame`, `supports_last_frame`, `max_duration`, `audio`, `ref_cost`, seeded from the Guide's answers. The orchestrator picks a valid conditioning plan per model.

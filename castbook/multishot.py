@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from castbook.characters import resolve_character
-from castbook.dag import Executor, StepCache, billing
+from castbook.dag import Executor, StepCache, billing, judge_config, judge_key
 from castbook.runs import apply_event, is_cancel_requested, update_run
 from castbook.shots import Script
 from castbook.state import ModalDictState
@@ -42,6 +42,22 @@ def stitch_clips(clips: list[bytes], params: dict) -> tuple[bytes, dict]:
     return data, timing
 
 
+@app.function(image=service_image, cpu=1, timeout=300)
+def extract_last_frame(video: bytes) -> tuple[bytes, dict]:
+    """The clip's final frame as PNG: the next shot's first frame in lastframe_chain."""
+    from castbook.costs import StepTiming
+
+    t0 = time.perf_counter()
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "in.mp4").write_bytes(video)
+        # -update 1 keeps overwriting one image, so what's left is the last decoded frame
+        cmd = ["ffmpeg", "-loglevel", "error", "-sseof", "-1", "-i", f"{d}/in.mp4", "-update", "1", f"{d}/last.png"]
+        subprocess.run(cmd, check=True)
+        data = Path(d, "last.png").read_bytes()
+    timing = StepTiming(gpu="CPU", load_s=0.0, infer_s=time.perf_counter() - t0, cold=False).to_dict()
+    return data, timing
+
+
 class ModalBackend:
     """dag.Backend over the Modal workers."""
 
@@ -59,9 +75,10 @@ class ModalBackend:
         )
         return r["png"], r["timing"]
 
-    def clip(self, first_frame, prompt, seed, params):
+    def clip(self, first_frame, prompt, seed, params, last_frame=None):
         r = self.video.i2v.remote(
             first_frame=first_frame,
+            last_frame=last_frame,
             prompt=prompt,
             seed=seed,
             width=params["width"],
@@ -74,7 +91,12 @@ class ModalBackend:
 
     def score_image(self, reference, image, judge):
         return self.judge.score_image.remote(
-            reference, image, max_yaw=judge["max_yaw"], max_hand_overlap=judge["max_hand_overlap"], gate=judge["gate"]
+            reference,
+            image,
+            max_yaw=judge["max_yaw"],
+            max_hand_overlap=judge["max_hand_overlap"],
+            gate=judge["gate"],
+            min_face_px=judge.get("min_face_px"),
         )
 
     def score_video(self, reference, video, judge):
@@ -85,7 +107,11 @@ class ModalBackend:
             max_yaw=judge["max_yaw"],
             max_hand_overlap=judge["max_hand_overlap"],
             gate=judge["gate"],
+            min_face_px=judge.get("min_face_px"),
         )
+
+    def last_frame(self, video):
+        return extract_last_frame.remote(video)
 
     def stitch(self, clips, params):
         return stitch_clips.remote(clips, params)
@@ -148,6 +174,7 @@ def run_request(request_id: str, max_parallel: int = 3) -> dict:
                     "status": s.status,
                     "clip_key": s.clip_key,
                     "keyframe_key": s.keyframe_key,
+                    "end_keyframe_key": s.end_keyframe_key,
                     "error": s.error,
                 }
                 for s in result.shots
@@ -163,3 +190,27 @@ def fetch_artifacts(keys: list[str]) -> dict[str, bytes]:
     artifacts_vol.reload()
     store = LocalStore(ARTIFACTS_DIR)
     return {k: store.get(k).data for k in keys if store.get(k) is not None}
+
+
+@app.function(image=service_image, volumes={ARTIFACTS_DIR: artifacts_vol}, timeout=1200)
+def rejudge(attempts: list[dict], character_id: str, workflow_ref: str) -> list[dict]:
+    """Re-score stored artifacts with another workflow's judge settings: CPU only, no generation.
+
+    `attempts` are [{"key", "step"}]. Results land in the judge cache under the same keys the
+    executor uses, so a later run of that workflow reuses them.
+    """
+    wf = load_workflow(workflow_ref)
+    artifacts_vol.reload()
+    store = LocalStore(ARTIFACTS_DIR)
+    character = resolve_character(ModalDictState(), Path(ARTIFACTS_DIR), character_id)
+    cfg = judge_config(wf)
+    backend = ModalBackend()
+    cache = StepCache(store, artifacts_vol.commit)
+    ref = character["embedding"]
+    out = []
+    for a in attempts:
+        data = store.get(a["key"]).data
+        score = backend.score_video if a["step"] == "clip" else backend.score_image
+        result = cache.judged(judge_key(cfg, a["key"]), lambda data=data, score=score: score(ref, data, cfg))
+        out.append({**a, **result})
+    return out

@@ -1,0 +1,41 @@
+# keyframe_i2v@1 plus a minimum face size in the judge. The M2 run's shot 1 "failed" because the face was
+# 55 px wide in a wide shot, not because it was the wrong person; below min_face_px a frame is now unscorable.
+# Generation params are unchanged, so every keyframe and clip from @1 is a cache hit; only judging re-runs.
+id: keyframe_i2v
+version: 2
+mode: keyframe_i2v
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+    retry:
+      max_attempts: 3          # keyframes are cheap (~5 s warm), so re-roll freely
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true
+      width: 832
+      height: 480
+      num_frames: 81
+      fps: 16
+    retry:
+      max_attempts: 2          # clips cost ~4x a keyframe, so fewer tries
+      max_reprompts: 1
+      reprompt_suffix: " Keep the face turned toward the camera throughout; hands stay away from the face."
+  judge:
+    sample_every: 4
+    max_yaw: 45
+    max_hand_overlap: 0.15
+    min_face_px: 64            # narrower faces are unverifiable, not fail (provisional until M3 calibration)
+    gate:
+      metric: p10
+      min_score: 0.5
+      min_coverage: 0.5
+  stitch:
+    params:
+      fps: 16

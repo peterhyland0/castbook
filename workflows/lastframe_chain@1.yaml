@@ -1,0 +1,41 @@
+# Baseline: the "extend this clip" pattern. Shot 1 is keyframe -> clip as in keyframe_i2v@2; every later shot
+# starts from the previous clip's last frame, with only its motion prompt. No keyframe re-anchors identity, so
+# drift and compression accumulate shot over shot, and shots run strictly in sequence.
+id: lastframe_chain
+version: 1
+mode: lastframe_chain
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+    retry:
+      max_attempts: 3          # keyframes are cheap (~5 s warm), so re-roll freely
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true
+      width: 832
+      height: 480
+      num_frames: 81
+      fps: 16
+    retry:
+      max_attempts: 2          # clips cost ~4x a keyframe, so fewer tries
+      max_reprompts: 1
+      reprompt_suffix: " Keep the face turned toward the camera throughout; hands stay away from the face."
+  judge:
+    sample_every: 4
+    max_yaw: 45
+    max_hand_overlap: 0.15
+    min_face_px: 64            # narrower faces are unverifiable, not fail (provisional until M3 calibration)
+    gate:
+      metric: p10
+      min_score: 0.5
+      min_coverage: 0.5
+  stitch:
+    params:
+      fps: 16

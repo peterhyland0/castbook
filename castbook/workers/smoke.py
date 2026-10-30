@@ -7,6 +7,8 @@ from castbook.workers.common import MODELS_DIR, app, diffusion_image, judge_imag
 
 @app.function(image=diffusion_image, volumes={MODELS_DIR: models_vol}, cpu=2, memory=8192, timeout=900)
 def smoke() -> dict:
+    import inspect
+
     import diffusers
     import torch
     import transformers
@@ -23,6 +25,8 @@ def smoke() -> dict:
         "torch": str(torch.__version__),
         "diffusers": str(diffusers.__version__),
         "transformers": str(transformers.__version__),
+        # keyframe_flf passes the end keyframe as `last_image`; fail here, not after an H100 cold start
+        "wan_last_image": "last_image" in inspect.signature(WanImageToVideoPipeline.__call__).parameters,
     }
     AutoProcessor.from_pretrained(f"{MODELS['qwen-image-edit-2511'].local_dir}/processor")
     AutoTokenizer.from_pretrained(f"{MODELS['wan2.2-i2v-a14b'].local_dir}/tokenizer")
