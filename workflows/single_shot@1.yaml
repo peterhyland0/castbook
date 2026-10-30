@@ -1,0 +1,21 @@
+# M1: one character portrait -> one keyframe -> one 5 s clip, scored for identity.
+# Immutable once used in a run: change a parameter by adding single_shot@2.yaml.
+id: single_shot
+version: 1
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true        # 4-step distilled LoRA; false = 40 steps with true CFG
+      width: 1248            # 16:9, downscaled to the clip size before animating
+      height: 720
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true        # 4-step distilled LoRA on both experts
+      width: 832
+      height: 480
+      num_frames: 81         # 5 s at 16 fps
+      fps: 16
+  judge:
+    sample_every: 8          # score every 8th frame

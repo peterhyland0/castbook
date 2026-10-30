@@ -1,0 +1,334 @@
+"""Static run viewer: one self-contained HTML page per run, plus an index.
+
+Reads out/runs/<run_id>/record.json and writes index.html next to it with the
+portrait, keyframe and clip embedded as data URIs, so the page is a single file
+you can open from disk or send to someone. No server, no external assets.
+
+    uv run python -m castbook.viewer            # render every run under out/runs
+"""
+
+import base64
+import html
+import json
+import sys
+from pathlib import Path
+
+from castbook.config import GPU_USD_PER_SECOND
+from castbook.workflow import load_workflow
+
+RUNS_DIR = Path("out/runs")
+
+# Chart geometry (SVG user units; the SVG scales to its container width).
+W, H = 720, 260
+PAD_L, PAD_R, PAD_T, PAD_B = 44, 16, 16, 36
+
+CSS = """
+:root {
+  --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #e3e2dd;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77766f;
+  --grid: #ebeae6; --series-1: #2a78d6; --ref: #77766f;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #96958c;
+    --grid: #262624; --series-1: #3987e5; --ref: #96958c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+a { color: var(--series-1); }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+.meta { color: var(--text-secondary); margin: 0 0 20px; }
+.meta code { font-size: 12px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; margin-bottom: 16px; }
+.media { display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px; }
+.media img { width: 100%; border-radius: 6px; display: block; }
+.media figure { margin: 0; }
+figcaption { color: var(--text-secondary); font-size: 12px; margin-top: 6px; }
+video { width: 100%; border-radius: 6px; display: block; background: #000; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.stat { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.stat .label { color: var(--text-secondary); font-size: 12px; }
+.stat .value { font-size: 22px; font-variant-numeric: tabular-nums; }
+.stat .sub { color: var(--text-muted); font-size: 12px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; }
+tfoot td { font-weight: 600; border-bottom: none; }
+.chart-wrap { position: relative; }
+svg.chart { width: 100%; height: auto; display: block; }
+svg.chart text { fill: var(--text-secondary); font-size: 11px; }
+.tooltip { position: absolute; pointer-events: none; background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.12); display: none; white-space: nowrap; }
+.hint { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+.prompt { color: var(--text-secondary); font-size: 13px; margin: 4px 0 0; }
+@media (max-width: 720px) {
+  .media { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
+"""
+
+
+def _fmt(v: float | None, digits: int = 2) -> str:
+    return "—" if v is None else f"{v:.{digits}f}"
+
+
+def _x(frame: int, n_frames: int) -> float:
+    return PAD_L + (W - PAD_L - PAD_R) * (frame / max(n_frames - 1, 1))
+
+
+def _y(sim: float) -> float:
+    # Cosine similarity can be slightly negative; clamp to the 0..1 axis.
+    return PAD_T + (H - PAD_T - PAD_B) * (1 - max(0.0, min(1.0, sim)))
+
+
+def identity_chart_svg(per_frame: list[dict], n_frames: int, keyframe_sim: float | None) -> str:
+    """Per-frame ArcFace similarity as a single 2px line with markers.
+
+    Frames with no detected face break the line and get a hollow marker on the
+    baseline, so a missing face never reads as a score of zero.
+    """
+    parts = [f'<svg class="chart" viewBox="0 0 {W} {H}" role="img" aria-label="Identity similarity per frame">']
+    for t in (0.0, 0.25, 0.5, 0.75, 1.0):
+        y = _y(t)
+        parts.append(f'<line x1="{PAD_L}" x2="{W - PAD_R}" y1="{y:.1f}" y2="{y:.1f}" stroke="var(--grid)"/>')
+        parts.append(f'<text x="{PAD_L - 8}" y="{y + 4:.1f}" text-anchor="end">{t:.2f}</text>')
+    for f in sorted({0, n_frames - 1, *[p["frame"] for p in per_frame][:: max(1, len(per_frame) // 6)]}):
+        parts.append(f'<text x="{_x(f, n_frames):.1f}" y="{H - 14}" text-anchor="middle">{f}</text>')
+    parts.append(f'<text x="{(PAD_L + W - PAD_R) / 2}" y="{H - 1}" text-anchor="middle">frame</text>')
+
+    if keyframe_sim is not None:
+        y = _y(keyframe_sim)
+        parts.append(
+            f'<line x1="{PAD_L}" x2="{W - PAD_R}" y1="{y:.1f}" y2="{y:.1f}" stroke="var(--ref)" '
+            f'stroke-width="1" stroke-dasharray="4 4"/>'
+        )
+        parts.append(f'<text x="{W - PAD_R}" y="{y - 6:.1f}" text-anchor="end">keyframe {keyframe_sim:.2f}</text>')
+
+    segment: list[str] = []
+    segments: list[list[str]] = []
+    for p in per_frame:
+        if p["sim"] is None:
+            if segment:
+                segments.append(segment)
+            segment = []
+        else:
+            segment.append(f"{_x(p['frame'], n_frames):.1f},{_y(p['sim']):.1f}")
+    if segment:
+        segments.append(segment)
+    for seg in segments:
+        parts.append(
+            f'<polyline points="{" ".join(seg)}" fill="none" stroke="var(--series-1)" stroke-width="2" '
+            f'stroke-linejoin="round" stroke-linecap="round"/>'
+        )
+    for p in per_frame:
+        x = _x(p["frame"], n_frames)
+        if p["sim"] is None:
+            parts.append(
+                f'<circle cx="{x:.1f}" cy="{_y(0):.1f}" r="4" fill="var(--surface-1)" stroke="var(--text-muted)" '
+                f'stroke-width="1.5"/>'
+            )
+        else:
+            parts.append(
+                f'<circle cx="{x:.1f}" cy="{_y(p["sim"]):.1f}" r="4" fill="var(--series-1)" '
+                f'stroke="var(--surface-1)" stroke-width="2"/>'
+            )
+    parts.append(
+        f'<line id="playhead" x1="{PAD_L}" x2="{PAD_L}" y1="{PAD_T}" y2="{H - PAD_B}" stroke="var(--text-primary)" '
+        f'stroke-width="1" opacity="0.5"/>'
+    )
+    parts.append(
+        f'<line id="crosshair" x1="0" x2="0" y1="{PAD_T}" y2="{H - PAD_B}" stroke="var(--text-muted)" '
+        f'stroke-width="1" visibility="hidden"/>'
+    )
+    parts.append(
+        f'<rect id="hit" x="{PAD_L}" y="{PAD_T}" width="{W - PAD_L - PAD_R}" height="{H - PAD_T - PAD_B}" '
+        f'fill="transparent" style="cursor:pointer"/>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _step_rows(record: dict, models: dict[str, str]) -> tuple[str, float]:
+    rows, total = [], 0.0
+    for s in record["steps"]:
+        timings = s.get("timings") or []
+        if s["cache"] == "hit" or not timings:
+            rows.append(
+                f"<tr><td>{s['step']}</td><td>{html.escape(models.get(s['step'], ''))}</td><td>hit</td>"
+                f'<td>—</td><td class="num">—</td><td class="num">—</td><td class="num">$0.000</td></tr>'
+            )
+            continue
+        for t in timings:
+            total += t["usd"]
+            rows.append(
+                f"<tr><td>{s['step']}</td><td>{html.escape(models.get(s['step'], ''))}</td><td>miss</td>"
+                f"<td>{t['gpu']}{' · cold' if t['cold'] else ''}</td>"
+                f'<td class="num">{t["load_s"]:.1f}</td><td class="num">{t["infer_s"]:.1f}</td>'
+                f'<td class="num">${t["usd"]:.3f}</td></tr>'
+            )
+    return "".join(rows), total
+
+
+def _data_uri(path: Path, mime: str) -> str:
+    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+
+
+def render_run(run_dir: Path) -> Path:
+    record = json.loads((run_dir / "record.json").read_text())
+    wf = load_workflow(record["workflow"])
+    clip_params = wf.steps["clip"].params
+    fps = clip_params["fps"]
+    clip_step = next((s for s in record["steps"] if s["step"] == "clip"), {})
+    n_frames = clip_step.get("n_frames", clip_params["num_frames"])
+    models = {name: step.model or "" for name, step in wf.steps.items()}
+    ident = record["identity"]
+    kf, clip, per_frame = ident["keyframe"], ident["clip"], ident["clip_per_frame"]
+    rows, total = _step_rows(record, models)
+    warm_clip = next((t["infer_s"] for t in clip_step.get("timings", [])), None)
+    warm_usd = None if warm_clip is None else warm_clip * GPU_USD_PER_SECOND["H100"]
+    prompts = record.get("prompts", {})
+    frame_rows = "".join(
+        f'<tr><td class="num">{p["frame"]}</td><td class="num">{p["frame"] / fps:.2f}</td>'
+        f'<td class="num">{"no face" if p["sim"] is None else f"{p['sim']:.3f}"}</td></tr>'
+        for p in per_frame
+    )
+    data = json.dumps(
+        {"fps": fps, "n_frames": n_frames, "per_frame": per_frame, "W": W, "PAD_L": PAD_L, "PAD_R": PAD_R}
+    )
+
+    page = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Castbook run {record["run_id"]}</title><style>{CSS}</style></head>
+<body><main>
+<p><a href="../index.html">← all runs</a></p>
+<h1>{html.escape(record["character"])} · {html.escape(record["workflow"])}</h1>
+<p class="meta"><code>{record["run_id"]}</code> · seed {record["seed"]} · {record["wall_s"]:.0f} s wall</p>
+
+<div class="stats">
+  <div class="stat"><div class="label">Keyframe identity</div><div class="value">{_fmt(kf["mean"])}</div>
+    <div class="sub">ArcFace cosine vs portrait</div></div>
+  <div class="stat"><div class="label">Clip identity (mean)</div><div class="value">{_fmt(clip["mean"])}</div>
+    <div class="sub">min {_fmt(clip["min"])} · p10 {_fmt(clip["p10"])} · faces {clip["face_rate"]:.0%}</div></div>
+  <div class="stat"><div class="label">GPU cost this run</div><div class="value">${record["gpu_usd"]:.2f}</div>
+    <div class="sub">includes cold-start loads</div></div>
+  <div class="stat"><div class="label">Warm clip cost</div>
+    <div class="value">{"—" if warm_usd is None else f"${warm_usd:.3f}"}</div>
+    <div class="sub">{"—" if warm_clip is None else f"{warm_clip:.1f} s inference on H100"}</div></div>
+</div>
+
+<div class="card media">
+  <figure><img src="{_data_uri(run_dir / "portrait.png", "image/png")}" alt="Character portrait"><figcaption>Portrait (identity reference)</figcaption>
+    <img src="{_data_uri(run_dir / "keyframe.png", "image/png")}" alt="Keyframe" style="margin-top:12px">
+    <figcaption>Keyframe · {html.escape(models.get("keyframe", ""))}</figcaption>
+    {f'<p class="prompt">{html.escape(prompts["keyframe"])}</p>' if prompts.get("keyframe") else ""}</figure>
+  <figure><video id="clip" src="{_data_uri(run_dir / "clip.mp4", "video/mp4")}" controls loop muted playsinline></video>
+    <figcaption>Clip · {html.escape(models.get("clip", ""))} · {n_frames} frames at {fps} fps</figcaption>
+    {f'<p class="prompt">{html.escape(prompts["clip"])}</p>' if prompts.get("clip") else ""}</figure>
+</div>
+
+<div class="card">
+  <h2>Identity per frame</h2>
+  <div class="chart-wrap">{identity_chart_svg(per_frame, n_frames, kf["mean"])}<div class="tooltip" id="tip"></div></div>
+  <p class="hint">Hover for values; click to jump the clip to that frame. Hollow markers on the baseline are
+  frames with no detected face. Scores are not pose-aware yet: turned-away frames score low even when the
+  identity is right.</p>
+  <details><summary>Table view</summary>
+    <table><thead><tr><th class="num">Frame</th><th class="num">Time (s)</th><th class="num">Similarity</th></tr></thead>
+    <tbody>{frame_rows}</tbody></table></details>
+</div>
+
+<div class="card">
+  <h2>Steps and cost</h2>
+  <table><thead><tr><th>Step</th><th>Model</th><th>Cache</th><th>GPU</th><th class="num">Load s</th>
+    <th class="num">Inference s</th><th class="num">$</th></tr></thead>
+  <tbody>{rows}</tbody>
+  <tfoot><tr><td colspan="6">Total (attributable GPU time)</td><td class="num">${total:.3f}</td></tr></tfoot></table>
+</div>
+</main>
+<script>
+const D = {data};
+const svg = document.querySelector("svg.chart"), tip = document.getElementById("tip");
+const video = document.getElementById("clip"), hit = document.getElementById("hit");
+const cross = document.getElementById("crosshair"), play = document.getElementById("playhead");
+const span = D.W - D.PAD_L - D.PAD_R;
+const xOf = f => D.PAD_L + span * f / Math.max(D.n_frames - 1, 1);
+function toFrame(evt) {{
+  const pt = svg.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  return Math.max(0, Math.min(D.n_frames - 1, (p.x - D.PAD_L) / span * (D.n_frames - 1)));
+}}
+function nearest(f) {{
+  return D.per_frame.reduce((a, b) => Math.abs(b.frame - f) < Math.abs(a.frame - f) ? b : a);
+}}
+hit.addEventListener("mousemove", e => {{
+  const p = nearest(toFrame(e)), x = xOf(p.frame);
+  cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
+  tip.innerHTML = `<b>frame ${{p.frame}}</b> · ${{(p.frame / D.fps).toFixed(2)}} s<br>` +
+    (p.sim === null ? "no face detected" : `similarity ${{p.sim.toFixed(3)}}`);
+  const box = svg.getBoundingClientRect(), wrap = svg.parentElement.getBoundingClientRect();
+  const px = (x / D.W) * box.width;
+  tip.style.display = "block";
+  tip.style.left = Math.min(px + 12, box.width - tip.offsetWidth) + "px";
+  tip.style.top = (e.clientY - wrap.top - 40) + "px";
+}});
+hit.addEventListener("mouseleave", () => {{ tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); }});
+hit.addEventListener("click", e => {{ video.pause(); video.currentTime = nearest(toFrame(e)).frame / D.fps; }});
+function tick() {{
+  const x = xOf(Math.min(D.n_frames - 1, video.currentTime * D.fps));
+  play.setAttribute("x1", x); play.setAttribute("x2", x);
+  requestAnimationFrame(tick);
+}}
+requestAnimationFrame(tick);
+</script>
+</body></html>
+"""
+    out = run_dir / "index.html"
+    out.write_text(page)
+    return out
+
+
+def render_index(runs_dir: Path = RUNS_DIR) -> Path:
+    rows = []
+    for d in sorted((p for p in runs_dir.iterdir() if (p / "record.json").exists()), reverse=True):
+        r = json.loads((d / "record.json").read_text())
+        ident = r["identity"]
+        rows.append(
+            f'<tr><td><a href="{d.name}/index.html">{r["run_id"]}</a></td><td>{html.escape(r["character"])}</td>'
+            f"<td>{html.escape(r['workflow'])}</td>"
+            f'<td class="num">{_fmt(ident["keyframe"]["mean"])}</td><td class="num">{_fmt(ident["clip"]["mean"])}</td>'
+            f'<td class="num">{_fmt(ident["clip"]["min"])}</td><td class="num">${r["gpu_usd"]:.2f}</td>'
+            f'<td class="num">{r["wall_s"]:.0f}</td></tr>'
+        )
+    page = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Castbook runs</title><style>{CSS}</style></head>
+<body><main><h1>Castbook runs</h1><p class="meta">{len(rows)} run(s) in <code>{runs_dir}</code></p>
+<div class="card"><table><thead><tr><th>Run</th><th>Character</th><th>Workflow</th>
+<th class="num">Keyframe ID</th><th class="num">Clip ID mean</th><th class="num">Clip ID min</th>
+<th class="num">GPU $</th><th class="num">Wall s</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
+</main></body></html>
+"""
+    out = runs_dir / "index.html"
+    out.write_text(page)
+    return out
+
+
+def render_all(runs_dir: Path = RUNS_DIR) -> Path:
+    for d in runs_dir.iterdir():
+        if (d / "record.json").exists():
+            render_run(d)
+    return render_index(runs_dir)
+
+
+if __name__ == "__main__":
+    print(render_all(Path(sys.argv[1]) if len(sys.argv) > 1 else RUNS_DIR).resolve())

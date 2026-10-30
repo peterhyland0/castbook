@@ -1,0 +1,22 @@
+# Golden character set: original, generated people only (no real likenesses).
+# Portraits follow Mage's own Character guidance: one clear, front-facing portrait.
+style: >-
+  Photorealistic head-and-shoulders studio portrait, facing the camera directly,
+  neutral expression, even soft lighting, plain light-grey background, sharp focus
+  on the face, 85mm lens.
+characters:
+  - id: c01
+    seed: 101
+    description: a woman in her late twenties with a short black bob, light brown skin, dark brown eyes and a small mole above her lip, wearing a mustard knit sweater
+  - id: c02
+    seed: 202
+    description: a man in his fifties with a grey beard, weathered pale skin, blue eyes and a flat cap, wearing a navy wool coat
+  - id: c03
+    seed: 303
+    description: a woman in her forties with long red curly hair, freckles, green eyes and round tortoiseshell glasses, wearing a denim jacket
+  - id: c04
+    seed: 404
+    description: a man in his early twenties with a high fade haircut, dark skin, a thin moustache and a silver stud earring, wearing a white hoodie
+  - id: c05
+    seed: 505
+    description: a woman in her sixties with a silver pixie cut, East Asian features, deep smile lines and small pearl earrings, wearing a burgundy blouse
