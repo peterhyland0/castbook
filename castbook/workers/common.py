@@ -31,6 +31,13 @@ def _with_source(image: modal.Image) -> modal.Image:
 
 cpu_image = _with_source(modal.Image.debian_slim(python_version="3.12").uv_pip_install(*_CORE_DEPS))
 
+# Orchestrator, stitch and API: CPU only, with ffmpeg for concatenating clips and FastAPI for the HTTP layer.
+service_image = _with_source(
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("ffmpeg")
+    .uv_pip_install(*_CORE_DEPS, "fastapi[standard]")
+)
+
 download_image = _with_source(
     modal.Image.debian_slim(python_version="3.12")
     .uv_pip_install(*_CORE_DEPS, "huggingface_hub[hf_xet]")
@@ -103,6 +110,7 @@ __all__ = [
     "models_vol",
     "artifacts_vol",
     "cpu_image",
+    "service_image",
     "download_image",
     "diffusion_image",
     "judge_image",

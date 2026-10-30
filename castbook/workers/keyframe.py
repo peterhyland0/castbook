@@ -28,7 +28,14 @@ _LIGHTNING_SCHEDULER = {
 }
 
 
-@app.cls(image=diffusion_image, gpu="H100", volumes={MODELS_DIR: models_vol}, scaledown_window=120, timeout=1800)
+@app.cls(
+    image=diffusion_image,
+    gpu="H100",
+    volumes={MODELS_DIR: models_vol},
+    scaledown_window=120,
+    max_containers=1,
+    timeout=1800,
+)
 class Keyframe(TimedWorker):
     GPU = "H100"
 

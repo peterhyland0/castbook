@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from castbook.config import MODELS
+from castbook.multishot import fetch_artifacts, run_request
 from castbook.pipeline import make_golden, single_shot
 from castbook.viewer import render_index, render_run
 from castbook.workers.common import app
@@ -88,3 +89,41 @@ def shot(
     render_run(out)
     render_index(OUT / "runs")
     print(f"saved to {out}/  ·  viewer: {(out / 'index.html').resolve()}")
+
+
+@app.local_entrypoint()
+def multishot(script: str = "evals/scripts/cafe_morning.yaml", workflow: str = "keyframe_i2v@1", max_parallel: int = 3):
+    """Run a shot script end to end on Modal (no HTTP), then download the result to out/multi/<request_id>/."""
+    from castbook.runs import create_run
+    from castbook.shots import load_script
+    from castbook.state import ModalDictState
+    from castbook.workflow import load_workflow
+
+    state = ModalDictState()
+    run, _ = create_run(state, load_workflow(workflow), load_script(script))
+    rid = run["request_id"]
+    print(f"{rid}: {len(run['shots'])} shots, estimate ${run['estimate']['usd_low']}-{run['estimate']['usd_high']}")
+    result = run_request.remote(rid, max_parallel)
+    final = state.get("runs", rid)
+
+    out = OUT / "multi" / rid
+    out.mkdir(parents=True, exist_ok=True)
+    keys = {"final.mp4": result["final_key"]} if result["final_key"] else {}
+    for s in result["shots"]:
+        for a in s["keyframe_attempts"]:
+            keys[f"{s['shot_id']}/keyframe_{a['n']}.png"] = a["key"]
+        for a in s["clip_attempts"]:
+            keys[f"{s['shot_id']}/clip_{a['n']}.mp4"] = a["key"]
+    blobs = fetch_artifacts.remote([k for k in keys.values() if k])
+    for name, key in keys.items():
+        if key in blobs:
+            (out / name).parent.mkdir(parents=True, exist_ok=True)
+            (out / name).write_bytes(blobs[key])
+    (out / "record.json").write_text(json.dumps({**result, "run": final}, indent=2, default=str))
+
+    print(f"status={result['status']} gpu_usd={final['billing']['usd']} wall={result['wall_s']}s")
+    for s in result["shots"]:
+        kf = " ".join(f"{a['verdict']['status']}" for a in s["keyframe_attempts"])
+        cl = " ".join(f"{a['verdict']['status']}" for a in s["clip_attempts"])
+        print(f"  {s['shot_id']}: {s['status']:9} keyframe[{kf}] clip[{cl}] {s['error'] or ''}")
+    print(f"saved to {out}/")

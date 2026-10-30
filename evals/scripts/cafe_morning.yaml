@@ -1,0 +1,27 @@
+# A 3-shot, 15-second script for golden character c01. Motion prompts keep the face toward camera,
+# the lesson from the first single-shot run (a turn to the window made 76% of frames unscorable).
+character: c01
+seed: 11
+shots:
+  - id: s1
+    keyframe: >-
+      The same person from the reference image walking along a quiet city street at dawn, soft golden
+      light, wide shot from the front, cinematic 16:9 still, same face, same hairstyle, same outfit.
+    motion: >-
+      The person walks slowly toward the camera, looking ahead with a calm expression, gentle tracking
+      shot, morning light.
+  - id: s2
+    keyframe: >-
+      The same person from the reference image ordering at a café counter, warm interior light, medium
+      shot facing the camera, cinematic 16:9 still, same face, same hairstyle, same outfit.
+    motion: >-
+      The person smiles and nods at the barista just off camera, small natural head movement, steady
+      camera, warm light.
+  - id: s3
+    keyframe: >-
+      The same person from the reference image sitting by a café window holding a cup with both hands at
+      chest height, soft window light, medium close-up facing the camera, cinematic 16:9 still, same face,
+      same hairstyle, same outfit.
+    motion: >-
+      The person looks up from the cup toward the camera and smiles softly, slight camera push-in, rain
+      on the window behind them.

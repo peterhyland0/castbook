@@ -11,7 +11,9 @@ The plan and motivation are in [PLAN.md](PLAN.md); the background research is in
 - **M0 (setup):** weights on a Modal Volume and a 5-character golden set.
 - **M1 (single shot end to end):** portrait → Qwen-Image-Edit-2511 keyframe → Wan 2.2 I2V clip, with ArcFace
   identity scores and per-step GPU cost.
-- **Next (M2):** multi-shot DAG, identity gate with re-roll, FastAPI, Postgres step table, GCS artifacts.
+- **M2 (in progress):** multi-shot DAG with gate-driven re-rolls and stitching, run on Modal. FastAPI layer built
+  and tested locally but not deployed. Run state is a modal.Dict for now (Postgres later); artifacts are still on
+  a Modal Volume (GCS later). Not started: LLM shot planner (needs an Anthropic key), moderation gates.
 
 ## First result (2026-10-29, run `20261030T014009-ba3d2d`, character c01)
 
@@ -72,6 +74,28 @@ than 15% of the face box. Profile and occlusion are counted independently, so a 
   the turn (0.89 → 0.67 and 18–20 → 13–15), so they're recorded per frame for calibration but aren't gating.
 - **Score any image** with `uv run modal run -m castbook.entry::judge_file --image <path> --character c01`.
 
+## M2: multi-shot run (`keyframe_i2v@1`, request `req_c5c36ab86736`, script `evals/scripts/cafe_morning.yaml`)
+
+Three shots of c01 (street at dawn, café counter, café window), each a keyframe → clip chain with the identity gate
+driving re-rolls, then stitched into one 15 s video. **Succeeded: $0.39 attributable GPU, 419 s wall.**
+
+| Shot | Keyframe attempts | Clip attempts | Result |
+|---|---|---|---|
+| s1 wide street | fail 0.48 → fail 0.48 → **pass 0.52** | fail 0.24 → fail 0.29 | degraded (best clip kept) |
+| s2 café counter | **pass 0.67** | unverifiable (67% profile) → **re-prompted, pass 0.50** | pass |
+| s3 café window | **pass 0.77** | **pass 0.56** | pass |
+
+- **The retry ladder behaved as designed on real outputs.** Failed keyframes were re-rolled with new seeds. The
+  unverifiable clip was re-prompted ("keep the face turned toward the camera") and passed. The exhausted shot kept
+  its best attempt and the run still produced a video.
+- **Shot 1's *fail* is a false fail from face size.** It's visibly the same person, but small in a wide shot:
+  similarity tracks face width (55 px → 0.33, 80 px → 0.52, 135 px → 0.57). That's the third false-fail mode, after
+  profile and occlusion. Next: a minimum face size below which frames are *unverifiable*, and an M3 calibration of
+  the threshold by face size rather than one global 0.5.
+- **Warm step times:** keyframe 2.3–2.4 s, clip 19.8 s. **Cold loads:** 43 s (Qwen-Edit) and 198 s (Wan). One cold
+  start per model pool, because each pool is capped at one container.
+- **Cost split:** $0.27 of the $0.39 is the two cold loads; the eight warm model calls cost $0.12.
+
 ## Layout
 
 ```
@@ -99,6 +123,7 @@ tests/             unit tests (no GPU needed)
 
 ```bash
 uv sync
+uv run modal run -m castbook.entry::multishot --script evals/scripts/cafe_morning.yaml   # M2: -> out/multi/<request_id>/
 uv run pytest -q
 uv run modal run -m castbook.entry::download_weights   # M0: ~215 GB into the castbook-models Volume
 uv run modal run -m castbook.entry::golden             # M0: 5 portraits -> out/golden/

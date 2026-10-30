@@ -9,6 +9,22 @@ from pydantic import BaseModel, ConfigDict
 WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / "workflows"
 
 
+class RetryPolicy(BaseModel):
+    """How the identity gate drives re-rolls for one step.
+
+    The ladder mirrors what Mage Agent does in prose, made deterministic:
+    re-roll with a new seed on `fail`; on `unverifiable`, first re-prompt with
+    `reprompt_suffix` (keep the face visible) up to `max_reprompts` times, then
+    re-roll. When attempts run out, keep the best attempt (pass > unverifiable >
+    fail, then by score) and mark the shot as degraded rather than failing the run.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    max_attempts: int = 3
+    max_reprompts: int = 1
+    reprompt_suffix: str = ""
+
+
 class StepConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str | None = None
@@ -17,6 +33,7 @@ class StepConfig(BaseModel):
     max_yaw: float | None = None
     max_hand_overlap: float | None = None
     gate: dict[str, Any] | None = None
+    retry: RetryPolicy | None = None
 
 
 class Workflow(BaseModel):

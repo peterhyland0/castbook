@@ -53,3 +53,10 @@ GPU_USD_PER_SECOND: dict[str, float] = {
     "L4": 0.000222,
     "CPU": 0.0000131,  # ~1 physical core
 }
+
+# Measured step timings from the first single-shot run (H100, 4-step Lightning). Used to price runs before
+# they start; update when the workers or settings change.
+MEASURED: dict[str, dict] = {
+    "keyframe": {"gpu": "H100", "load_s": 56.7, "infer_s": 5.4},
+    "clip": {"gpu": "H100", "load_s": 227.2, "infer_s": 22.4},
+}

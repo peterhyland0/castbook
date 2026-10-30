@@ -1,0 +1,40 @@
+# Multi-shot, Mage Agent's own recipe: one keyframe per shot (identity baked in from the portrait), then
+# image-to-video from that keyframe, then stitch. The identity gate drives re-rolls on both steps.
+# Keyframe and clip params match single_shot@1-3, so their cached artifacts are shared across workflows.
+# Immutable once used in a run: change a parameter by adding keyframe_i2v@2.yaml.
+id: keyframe_i2v
+version: 1
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+    retry:
+      max_attempts: 3          # keyframes are cheap (~5 s warm), so re-roll freely
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true
+      width: 832
+      height: 480
+      num_frames: 81
+      fps: 16
+    retry:
+      max_attempts: 2          # clips cost ~4x a keyframe, so fewer tries
+      max_reprompts: 1
+      reprompt_suffix: " Keep the face turned toward the camera throughout; hands stay away from the face."
+  judge:
+    sample_every: 4
+    max_yaw: 45
+    max_hand_overlap: 0.15
+    gate:
+      metric: p10
+      min_score: 0.5
+      min_coverage: 0.5
+  stitch:
+    params:
+      fps: 16

@@ -231,11 +231,13 @@ castbook/
 - [x] Log GPU-seconds and $ per step (first run: $0.34, of which $0.025 is warm clip inference; see README)
 
 **M2: Multi-shot pipeline + identity gate + API (4–5 days)**
-- [ ] Workflow YAML loader, DAG walker with `.spawn()` fan-out, Postgres step table
-- [ ] Content-addressed GCS cache; prove resume by killing a run mid-way
-- [ ] Identity gate with bounded re-roll (new seed); keep best attempt on exhaustion
-- [ ] Shot planner (Claude) → typed shot specs; ffmpeg stitch
-- [ ] FastAPI: characters, runs, status, cancel; idempotency keys; billing block
+- [x] Workflow YAML loader, DAG walker with threaded fan-out (shots in parallel; each GPU pool capped at 1 container), run state in a modal.Dict (Postgres later)
+- [x] Content-addressed cache with resume (tested: a rerun is all cache hits, a partial run only computes the missing shot). Still a Modal Volume; GCS later
+- [x] Identity gate with bounded re-roll (new seed); re-prompt on *unverifiable*; keep best attempt on exhaustion (real run: 1 keyframe re-rolled twice, 1 clip re-prompted to a pass)
+- [x] ffmpeg stitch (concat, no re-encode)
+- [ ] Shot planner (Claude) → typed shot specs. Needs an Anthropic API key; scripts are hand-written for now
+- [ ] Minimum face size: frames with a small face are *unverifiable*, not *fail* (the wide shot scored 0.33 at 55 px for the right person)
+- [x] FastAPI: characters, runs, status, cancel, result, estimate; idempotency keys; billing block; bearer auth (tested locally; not deployed)
 - [ ] Retry policy:
   - transient (Modal retries), 429/5xx (backoff), OOM (drop resolution)
   - a per-shot ladder as config: `same → degrade (fewer refs / lower res) → alternate_model → fallback_shot`, mirroring Mage Agent's prose protocol

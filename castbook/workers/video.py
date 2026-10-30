@@ -18,7 +18,14 @@ NEGATIVE = (
 )
 
 
-@app.cls(image=diffusion_image, gpu="H100", volumes={MODELS_DIR: models_vol}, scaledown_window=120, timeout=2400)
+@app.cls(
+    image=diffusion_image,
+    gpu="H100",
+    volumes={MODELS_DIR: models_vol},
+    scaledown_window=120,
+    max_containers=1,
+    timeout=2400,
+)
 class Video(TimedWorker):
     GPU = "H100"
 
