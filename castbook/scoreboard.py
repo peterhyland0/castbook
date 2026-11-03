@@ -54,7 +54,9 @@ def summarize(result: dict) -> dict:
     shots = []
     for s in result["shots"]:
         clip = _chosen(s["clip_attempts"], s.get("clip_key"))
-        first_try = all(s.get(f) and s[f][0]["verdict"]["status"] == "pass" for f in _GATED if s.get(f))
+        # one attempt per gated step, and it passed (a re-framed keyframe passes identity but took a retry)
+        first_try = all(len(s[f]) == 1 and s[f][0]["verdict"]["status"] == "pass" for f in _GATED if s.get(f))
+        kf = _chosen(s.get("keyframe_attempts", []), s.get("keyframe_key"))
         shots.append(
             {
                 "shot_id": s["shot_id"],
@@ -66,6 +68,8 @@ def summarize(result: dict) -> dict:
                 "reasons": clip["verdict"]["reasons"] if clip else [_short_error(s.get("error"))],
                 "first_try_pass": bool(first_try and s["clip_attempts"]),
                 "attempts": {f.removesuffix("_attempts"): len(s.get(f, [])) for f in _GATED if s.get(f)},
+                "keyframe_face_px": kf.get("face_px") if kf else None,
+                "clip_size": s.get("clip_size") or (clip_params["width"], clip_params["height"]),
             }
         )
     accepted = sum(1 for s in shots if s["clip_status"] == "pass")
@@ -155,6 +159,10 @@ def render(out_dir: Path, arms: list[dict], script: dict) -> Path:
             s = a["shots"][i]
             label = f"{_f(s['clip_p10'])} · {_f(s['coverage'], '{:.0%}')} scored"
             tries = " · ".join(f"{k} ×{v}" for k, v in s["attempts"].items())
+            size = s.get("clip_size")
+            if size:
+                face = s.get("keyframe_face_px")
+                tries += f" · clip {size[0]}×{size[1]}" + (f" · keyframe face {face:.0f} px" if face else "")
             why = "; ".join(r for r in s["reasons"] if r)
             cells.append(
                 f"<td>{_chip(s['clip_status'], label)}"

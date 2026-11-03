@@ -17,7 +17,9 @@ cheap single-shot edits come from the same mechanism.
 
 The identity gate decides each attempt's fate (see workflow.RetryPolicy):
 `pass` stops, `fail` re-rolls with a new seed, `unverifiable` re-prompts once
-to keep the face visible and then re-rolls. When attempts run out the best one
+to keep the face visible and then re-rolls. With a `framing` block, a keyframe
+that passes but whose face would be too small in the clip is re-framed the
+same way, and each shot's clip size is picked from its keyframes' face size. When attempts run out the best one
 is kept and the shot is marked degraded; one bad shot never fails the run.
 
 This module has no Modal imports: the GPU work sits behind `Backend`, so the
@@ -71,11 +73,13 @@ class Attempt:
     verdict: dict
     score: dict
     timing: dict | None  # what producing this artifact cost; on a hit, the cost recorded when it was made
+    face_px: float | None = None  # keyframes: detected face width, for the framing check
+    framing: str | None = None  # "small" when identity passed but the clip's face would be too small to score
 
     @property
-    def rank(self) -> tuple[int, float]:
+    def rank(self) -> tuple[int, bool, float]:
         value = self.verdict.get("value")
-        return (_RANK[self.verdict["status"]], -1.0 if value is None else value)
+        return (_RANK[self.verdict["status"]], self.framing is None, -1.0 if value is None else value)
 
 
 @dataclass
@@ -88,6 +92,7 @@ class ShotResult:
     keyframe_key: str | None = None  # the clip's first frame: a keyframe, or the previous clip's last frame
     end_keyframe_key: str | None = None
     clip_key: str | None = None
+    clip_size: tuple[int, int] | None = None  # set when the workflow picks clip size per shot (Framing)
     error: str | None = None
 
     def to_dict(self) -> dict:
@@ -199,6 +204,7 @@ class Executor:
         generate: Callable[[str, int], tuple[bytes, dict]],
         judge: Callable[[bytes], dict],
         name: str,
+        framing: Callable[[Attempt], str | None] | None = None,
     ) -> list[Attempt]:
         cfg = self.wf.steps[step]
         policy = cfg.retry or RetryPolicy(max_attempts=1)
@@ -217,13 +223,23 @@ class Executor:
             )
             timing = timing or art.meta.get("timing")
             result = self.cache.judged(judge_key(self.judge_cfg, key), lambda art=art: judge(art.data))
-            attempt = Attempt(step, n, seed, prompt, key, cache, result["verdict"], result["score"], timing)
+            face = (result.get("frame") or {}).get("face_px")
+            attempt = Attempt(
+                step, n, seed, prompt, key, cache, result["verdict"], result["score"], timing, face_px=face
+            )
+            status = attempt.verdict["status"]
+            if status == "pass" and framing is not None:
+                attempt.framing = framing(attempt)
             attempts.append(attempt)
             self.on_event({"type": "attempt", "step": step, "shot_index": shot_index, **_brief(attempt)})
-            status = attempt.verdict["status"]
-            if status == "pass":
+            if status == "pass" and attempt.framing is None:
                 break
-            suffix = policy.suffix_for(blocking_cause(attempt.score)) if status == "unverifiable" else ""
+            if attempt.framing:  # identity is fine, the framing isn't: only a cause-specific suffix helps
+                suffix = policy.reprompt_by_cause.get(attempt.framing, "")
+            elif status == "unverifiable":
+                suffix = policy.suffix_for(blocking_cause(attempt.score))
+            else:
+                suffix = ""
             if suffix and reprompts < policy.max_reprompts:
                 prompt = prompt + suffix
                 reprompts += 1
@@ -247,6 +263,9 @@ class Executor:
         def score_image(data: bytes) -> dict:
             return self.backend.score_image(reference, data, self.judge_cfg)
 
+        kf_width = self.wf.steps["keyframe"].params.get("width")
+        framing = self._framing_check(kf_width)
+
         try:
             gated: list[Attempt] = []
             if first is None:
@@ -260,6 +279,7 @@ class Executor:
                     lambda p, s: self.backend.keyframe([portrait], p, s, kf_params),
                     score_image,
                     "keyframe.png",
+                    framing,
                 )
                 gated.append(best(result.keyframe_attempts))
                 result.keyframe_key = gated[-1].key
@@ -279,12 +299,17 @@ class Executor:
                     lambda p, s: self.backend.keyframe([start, portrait], p, s, end_params),
                     score_image,
                     "end_keyframe.png",
+                    framing,
                 )
                 gated.append(best(result.end_keyframe_attempts))
                 result.end_keyframe_key = gated[-1].key
                 end = store.get(result.end_keyframe_key).data
 
             clip_params = self.wf.steps["clip"].params
+            faces = [best(a).face_px for a in (result.keyframe_attempts, result.end_keyframe_attempts) if a]
+            result.clip_size = self._clip_size(faces, kf_width)
+            if result.clip_size:
+                clip_params = {**clip_params, "width": result.clip_size[0], "height": result.clip_size[1]}
             inputs = [k for k in (result.keyframe_key, result.end_keyframe_key) if k]
             result.clip_attempts = self._attempts(
                 "clip",
@@ -305,6 +330,32 @@ class Executor:
             result.status, result.error = "error", f"{type(e).__name__}: {e}"
         self.on_event({"type": "shot", "shot_id": shot.id, "status": result.status})
         return result
+
+    def _framing_check(self, kf_width: int | None) -> Callable[[Attempt], str | None] | None:
+        """Keyframe check: would this face still be scorable in the cheapest clip? (see workflow.Framing)"""
+        fr = self.wf.framing
+        if fr is None or not kf_width:
+            return None
+        clip_w = fr.clip_sizes[0][0]
+
+        def check(a: Attempt) -> str | None:
+            small = a.face_px is not None and a.face_px * clip_w / kf_width < fr.min_clip_face_px
+            return "small" if small else None
+
+        return check
+
+    def _clip_size(self, faces: list[float | None], kf_width: int | None) -> tuple[int, int] | None:
+        """Cheapest clip size whose predicted face clears the bar; the largest if none does."""
+        fr = self.wf.framing
+        if fr is None:
+            return None
+        known = [f for f in faces if f is not None]
+        if not known or not kf_width:
+            return tuple(fr.clip_sizes[0])
+        for w, h in fr.clip_sizes:
+            if min(known) * w / kf_width >= fr.min_clip_face_px:
+                return (w, h)
+        return tuple(fr.clip_sizes[-1])
 
     def _last_frame(self, clip_key: str) -> tuple[str, bytes]:
         key = step_key("last_frame", "ffmpeg", "1", {}, [clip_key], 0)
@@ -379,6 +430,7 @@ def _brief(a: Attempt) -> dict:
         "seed": a.seed,
         "cache": a.cache,
         "status": a.verdict["status"],
+        "framing": a.framing,
         "value": a.verdict.get("value"),
         "reasons": a.verdict.get("reasons"),
         "usd": None if a.timing is None else a.timing.get("usd"),

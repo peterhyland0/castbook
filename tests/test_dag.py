@@ -297,3 +297,83 @@ def test_flf_v2_reuses_v1_first_attempts(tmp_path):
     b = FakeBackend()
     _run(tmp_path, b, _script(2, end=True), wf=load_workflow("keyframe_flf@2"))
     assert b.calls == {"keyframe": 0, "clip": 0, "stitch": 0}
+
+
+WF4 = load_workflow("keyframe_flf@4")
+SMALL_KF = WF4.steps["keyframe"].retry.reprompt_by_cause["small"]
+
+
+def _face(px):
+    """A passing image verdict with a detected face `px` wide."""
+    r = _verdict("pass")
+    r["frame"] = {"face_px": px}
+    return r
+
+
+def _clip_sizes(backend_calls):
+    return [(p["width"], p["height"]) for p in backend_calls]
+
+
+class SizedBackend(FakeBackend):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.clip_params: list[dict] = []
+
+    def clip(self, first_frame, prompt, seed, params, last_frame=None):
+        self.clip_params.append(params)
+        return super().clip(first_frame, prompt, seed, params, last_frame)
+
+
+def test_small_keyframe_is_reframed_before_any_clip(tmp_path):
+    # 80 px in a 1248-wide keyframe is ~53 px in an 832 clip: re-frame at the keyframe step.
+    kf = {"keyframe": lambda p, s: _face(120 if p.endswith(SMALL_KF) else 80)}
+    b = SizedBackend(rules=kf)
+    r = _run(tmp_path, b, _script(1, end=True), wf=WF4)
+    kfs = r.shots[0].keyframe_attempts
+    assert [a.framing for a in kfs] == ["small", None] and kfs[1].prompt.endswith(SMALL_KF)
+    assert r.shots[0].keyframe_key == kfs[1].key
+    assert _clip_sizes(b.clip_params) == [(832, 480)] and r.shots[0].clip_size == (832, 480)
+    assert r.shots[0].status == "pass"
+
+
+def test_keyframe_that_stays_small_gets_a_720p_clip(tmp_path):
+    b = SizedBackend(rules={"keyframe": lambda p, s: _face(80)})
+    r = _run(tmp_path, b, _script(1, end=True), wf=WF4)
+    assert len(r.shots[0].keyframe_attempts) == WF4.steps["keyframe"].retry.max_attempts
+    assert r.shots[0].clip_size == (1248, 720) and _clip_sizes(b.clip_params) == [(1248, 720)]
+    assert r.shots[0].status == "pass"  # identity passed; small framing alone doesn't degrade the shot
+
+
+def test_too_small_even_at_720p_uses_the_largest_size(tmp_path):
+    b = SizedBackend(rules={"keyframe": lambda p, s: _face(40)})
+    r = _run(tmp_path, b, _script(1, end=True), wf=WF4)
+    assert r.shots[0].clip_size == (1248, 720)
+
+
+def test_clip_size_uses_the_smaller_of_start_and_end_faces(tmp_path):
+    rules = {"keyframe": lambda p, s: _face(70 if p.startswith("Picture 1") else 140)}
+    b = SizedBackend(rules=rules)
+    r = _run(tmp_path, b, _script(1, end=True), wf=WF4)
+    assert r.shots[0].clip_size == (1248, 720)
+
+
+def test_unknown_face_size_keeps_the_cheapest_clip_and_skips_reframing(tmp_path):
+    b = SizedBackend()  # verdicts carry no face size
+    r = _run(tmp_path, b, _script(1, end=True), wf=WF4)
+    assert len(r.shots[0].keyframe_attempts) == 1 and r.shots[0].clip_size == (832, 480)
+
+
+def test_without_framing_clip_size_is_untouched(tmp_path):
+    b = SizedBackend(rules={"keyframe": lambda p, s: _face(40)})
+    r = _run(tmp_path, b, _script(1, end=True), wf=load_workflow("keyframe_flf@2"))
+    assert r.shots[0].clip_size is None and _clip_sizes(b.clip_params) == [(832, 480)]
+    assert len(r.shots[0].keyframe_attempts) == 1
+
+
+def test_rank_prefers_well_framed_passes():
+    from castbook.dag import Attempt, best
+
+    v = {"status": "pass", "value": 0.7}
+    small = Attempt("keyframe", 0, 1, "p", "k0", "miss", {**v, "value": 0.9}, {}, None, framing="small")
+    ok = Attempt("keyframe", 1, 2, "p", "k1", "miss", v, {}, None)
+    assert best([small, ok]) is ok

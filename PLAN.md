@@ -238,8 +238,10 @@ castbook/
 - [ ] Shot planner (Claude) → typed shot specs. Needs an Anthropic API key; scripts are hand-written for now
 - [x] Minimum face size: frames with a face narrower than 64 px are *unverifiable*, not *fail* (`keyframe_i2v@2`; re-judged on CPU, the M2 wide shot's false fails became *unverifiable*)
 - [x] Re-prompt by reason (`reprompt_by_cause`) and a 720p clip arm (`keyframe_flf@2`, `@3`): the re-prompt can't move a face pinned by both FLF keyframes; 720p made s1 scorable (it fails, p10 0.44) at 3.6× clip cost; VAE tiled above 480p after an OOM
-- [ ] Size-aware gate: is s1's 0.44 at ~80 px drift or face size? Calibrate p10 against face width on labeled frames before trusting verdicts on wide shots
-- [ ] Small-face fix upstream: when a clip is *small*, re-make the keyframe tighter (cross-step retry) instead of re-prompting the clip
+- [ ] Size-aware gate: calibrate p10 against face width on labeled frames before trusting verdicts on wide shots (s1 with every frame above 64 px still scored 0.43–0.48, so size isn't the whole story there)
+- [x] Small-face fix upstream (`keyframe_flf@4`, `framing`): predict the clip's face from the keyframe, re-frame there, pick clip size per shot. s1 re-framed 79 → 244 px for ~$0.003 and scored at 480p (fails: drift, not size)
+- [ ] Re-framing keeps the shot coherent: when the start keyframe is re-framed, re-derive the end keyframe's framing so the clip's motion still matches the beat
+- [ ] Shot 1 drift: all frames scorable, p10 0.43–0.48 at both sizes; try more clip attempts, a different seed range, or a calmer motion prompt, and look at per-frame similarity over time
 - [x] FastAPI: characters, runs, status, cancel, result, estimate; idempotency keys; billing block; bearer auth (tested locally; not deployed)
 - [ ] Retry policy:
   - transient (Modal retries), 429/5xx (backoff), OOM (drop resolution)

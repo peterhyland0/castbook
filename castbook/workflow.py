@@ -47,6 +47,21 @@ class StepConfig(BaseModel):
     retry: RetryPolicy | None = None
 
 
+class Framing(BaseModel):
+    """Catch a too-small face at the keyframe, where a retry costs ~$0.003, not at the clip (~$0.02 at 480p).
+
+    The clip is the keyframe resized, so its face width is predictable: keyframe face px x clip width /
+    keyframe width. A keyframe that passes identity but predicts a face under `min_clip_face_px` at the cheapest
+    clip size is re-prompted with the step's `small` suffix (or re-rolled). Each shot's clip then renders at the
+    cheapest size in `clip_sizes` whose predicted face clears the bar (the smaller of the start and end keyframe
+    faces in FLF), falling back to the largest. Shots with an unknown face size use the cheapest size.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    min_clip_face_px: float = 64  # match the judge's min_face_px so a predicted pass is scorable
+    clip_sizes: list[tuple[int, int]]  # (width, height), cheapest first
+
+
 # How shots are conditioned (see dag.py):
 #   keyframe_i2v     one keyframe per shot from the portrait, then image-to-video from it
 #   keyframe_flf     start and end keyframes per shot, then first-last-frame video between them
@@ -60,6 +75,7 @@ class Workflow(BaseModel):
     version: int
     mode: Mode = "keyframe_i2v"
     steps: dict[str, StepConfig]
+    framing: Framing | None = None
 
     @property
     def ref(self) -> str:

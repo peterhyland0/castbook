@@ -109,7 +109,8 @@ def estimate(workflow: Workflow, n_shots: int) -> dict:
     assumes a cold start per GPU worker (keyframe and end_keyframe share one),
     every attempt the retry policy allows, and the idle tail before scaledown.
     A step run at a different resolution than it was measured at is scaled
-    linearly in pixels for `low` and quadratically for `high` (see MEASURED).
+    linearly in pixels for `low` and quadratically for `high` (see MEASURED); with
+    per-shot clip sizes (workflow.Framing), `low` prices the cheapest and `high` the largest.
     """
     low = high = 0.0
     cold_paid: set[str] = set()
@@ -120,7 +121,10 @@ def estimate(workflow: Workflow, n_shots: int) -> dict:
         attempts = cfg.retry.max_attempts if cfg.retry else 1
         load = 0.0 if cfg.model in cold_paid else m["load_s"] + IDLE_TAIL_S
         cold_paid.add(cfg.model)
-        scale = cfg.params["width"] * cfg.params["height"] / m["px"] if "px" in m else 1.0
-        low += calls * m["infer_s"] * scale * rate
-        high += (load + calls * attempts * m["infer_s"] * scale**2) * rate
+        sizes = [(cfg.params.get("width"), cfg.params.get("height"))]
+        if step == "clip" and workflow.framing:  # per-shot size: cheapest for low, largest for high
+            sizes = workflow.framing.clip_sizes
+        lo_scale, hi_scale = ((w * h / m["px"] if "px" in m else 1.0) for w, h in (sizes[0], sizes[-1]))
+        low += calls * m["infer_s"] * lo_scale * rate
+        high += (load + calls * attempts * m["infer_s"] * hi_scale**2) * rate
     return {"usd_low": round(low, 3), "usd_high": round(high, 3), "basis": "measured H100 timings, Oct 2026"}

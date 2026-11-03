@@ -154,6 +154,32 @@ Shot 1 was *unverifiable* in every arm because its face is too small in the clip
   480p (480p stays untiled, so cached clips reproduce). The failed run cost about $0.33; the re-run billed $0.45
   plus idle tail.
 
+## M3: catch the small face at the keyframe (FLF @2 vs @3 vs @4, `out/scoreboard/cafe_morning_20261103-182431/`)
+
+`keyframe_flf@4` predicts each keyframe's face width in the clip (keyframe face × clip width / keyframe width).
+A keyframe that would come out under 64 px is re-framed at the keyframe step, and each shot's clip renders at
+720p only if its keyframes still predict too small at 480p (`framing` in the workflow).
+
+| Workflow | s1 keyframe face | s1 clip | s1 verdict | Accepted | Warm $ | $/accepted s |
+|---|---|---|---|---|---|---|
+| `keyframe_flf@2` (480p) | 79 px | 832×480 | unverifiable (0% scorable) | 2/3 | $0.120 | $0.0118 |
+| `keyframe_flf@3` (720p everywhere) | 79 px | 1248×720 | fail, p10 0.44 (100% scorable) | 2/3 | $0.345 | $0.0341 |
+| `keyframe_flf@4` (framing check) | 79 → **244 px** after one re-frame | 832×480 | fail, p10 0.48 / 0.43 (100% scorable) | 2/3 | **$0.122** | **$0.0121** |
+
+- **The prediction is accurate.** s1's 79 px keyframe face predicted 53 px in the 480p clip; the clip measured
+  52–56 px. s2 and s3 (151 and 201 px) predicted ≥ 99 px and needed nothing, so they stayed fully cached.
+- **Fixed at the cheap step.** One extra keyframe (~$0.003, "Framed closer: head and shoulders fill the frame")
+  took s1's face from 79 to 244 px and its keyframe identity from 0.52 to 0.84. Its clip then scored at 480p on
+  every frame, so `@4` gets the same answer as 720p for a third of the warm cost.
+- **The answer is that shot 1 drifts.** With every sampled frame above 64 px (predicted 163 → 72 px across the clip),
+  both clips still came in at p10 0.48 and 0.43, close to `@3`'s 0.44. That points at identity drift in this
+  shot's motion rather than at face size, so lowering the threshold would have passed a bad clip.
+- **Re-framing changed the shot.** The new start is a head-and-shoulders close-up, but the end keyframe (prompted
+  "closer, waist-up" relative to the old wide start) is wider, at 108 px, so the clip now pulls back while the
+  motion prompt says she walks toward the camera. A re-framed start should re-derive the end framing too, or the
+  planner should write identity-critical beats tighter to begin with.
+- Billed $0.27 plus about $0.26 of idle tail (image and video workers both cold).
+
 ## Layout
 
 ```
