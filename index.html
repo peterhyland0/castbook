@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Castbook</title>
+<meta name="description" content="Identity-gated, versioned multi-model video pipelines on Modal.">
+<style>
+:root {
+  --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #e3e2dd;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77766f;
+  --grid: #ebeae6; --series-1: #2a78d6; --ref: #77766f; --band: #efeee9;
+  --good: #0ca30c; --good-ink: #0a7d0a; --warning: #fab219; --warning-ink: #8a5a00;
+  --critical: #d03b3b; --critical-ink: #b02c2c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #96958c;
+    --grid: #262624; --series-1: #3987e5; --ref: #96958c; --band: #252523;
+    --good: #0ca30c; --good-ink: #5fcf5f; --warning: #fab219; --warning-ink: #fab219;
+    --critical: #d03b3b; --critical-ink: #ef7d7d;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+a { color: var(--series-1); }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+.meta { color: var(--text-secondary); margin: 0 0 20px; }
+.meta code { font-size: 12px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; margin-bottom: 16px; }
+.media { display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px; }
+.media img { width: 100%; border-radius: 6px; display: block; }
+.media figure { margin: 0; }
+figcaption { color: var(--text-secondary); font-size: 12px; margin-top: 6px; }
+video { width: 100%; border-radius: 6px; display: block; background: #000; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.stat { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.stat .label { color: var(--text-secondary); font-size: 12px; }
+.stat .value { font-size: 22px; font-variant-numeric: tabular-nums; }
+.stat .sub { color: var(--text-muted); font-size: 12px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; }
+tfoot td { font-weight: 600; border-bottom: none; }
+.chart-wrap { position: relative; }
+svg.chart { width: 100%; height: auto; display: block; }
+svg.chart text { fill: var(--text-secondary); font-size: 11px; }
+.tooltip { position: absolute; pointer-events: none; background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.12); display: none; white-space: nowrap; }
+.hint { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
+.verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.verdict { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  display: flex; gap: 12px; align-items: flex-start; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 10px 2px 6px;
+  font-size: 12px; font-weight: 600; white-space: nowrap; border: 1px solid currentColor; }
+.chip .dot { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center;
+  justify-content: center; color: #fff; font-size: 11px; line-height: 1; }
+.chip.pass { color: var(--good-ink); } .chip.pass .dot { background: var(--good); }
+.chip.fail { color: var(--critical-ink); } .chip.fail .dot { background: var(--critical); }
+.chip.unverifiable { color: var(--warning-ink); } .chip.unverifiable .dot { background: var(--warning); color: #1a1a19; }
+.verdict .what { font-weight: 600; } .verdict .why { color: var(--text-secondary); font-size: 13px; }
+@media (max-width: 720px) { .verdicts { grid-template-columns: 1fr; } }
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+.prompt { color: var(--text-secondary); font-size: 13px; margin: 4px 0 0; }
+@media (max-width: 720px) {
+  .media { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
+
+.hero { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; align-items: center; margin: 8px 0 20px; }
+.hero h1 { font-size: 28px; line-height: 1.2; margin: 0 0 10px; }
+.hero p { color: var(--text-secondary); font-size: 15px; margin: 0 0 10px; }
+.hero .links a { margin-right: 14px; font-weight: 600; }
+.portrait { display: flex; gap: 12px; align-items: center; }
+.portrait img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; }
+.portrait p { font-size: 12px; color: var(--text-muted); margin: 0; }
+.trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.trio figure, .pair figure { margin: 0; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pair img { width: 100%; border-radius: 6px; display: block; }
+.lede { color: var(--text-secondary); margin: -4px 0 12px; }
+.take { border-left: 3px solid var(--series-1); padding: 2px 0 2px 12px; margin: 12px 0 0; }
+td.win { font-weight: 700; color: var(--good-ink); }
+.scroll { overflow-x: auto; }
+pre { background: var(--surface-0); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+  overflow-x: auto; font-size: 12px; line-height: 1.45; margin: 0; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+ol.steps { margin: 0; padding-left: 20px; } ol.steps li { margin-bottom: 6px; }
+.chart-row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 16px; align-items: start; }
+footer { color: var(--text-muted); font-size: 12px; margin-top: 24px; }
+.hero > *, .trio > *, .pair > *, .cols > *, .chart-row > *, .stats > * { min-width: 0; }
+code { overflow-wrap: anywhere; }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-0); color: var(--text-primary); cursor: pointer; }
+@media (max-width: 760px) {
+  .hero, .trio, .pair, .cols, .chart-row { grid-template-columns: 1fr; }
+}
+</style></head><body><main>
+
+<section class="hero">
+  <div>
+    <h1>Did the chained workflow keep the character?</h1>
+    <p><b>Castbook</b> chains open-weights models (keyframe → video → stitch) on Modal GPUs, scores every shot
+    against the character's face, re-rolls the shots that drift, and records what each step cost. Workflows are
+    versioned configs, so two recipes can be run on the same script and compared on identity, retries and
+    <b>dollars per accepted second of video</b>.</p>
+    <p class="links"><a href="https://github.com/peterhyland0/castbook">Code on GitHub</a><a href="#how">How it works</a>
+      <a href="#next">What's next</a></p>
+  </div>
+  <div class="portrait"><img src="media/c01.jpg" alt="Generated character portrait c01">
+    <p>Character <code>c01</code>: one generated, front-facing portrait (no real people). Every score below is
+    ArcFace similarity to this face.</p></div>
+</section>
+
+<div class="stats">
+  <div class="stat"><div class="label">Shots passed first try</div>
+    <div class="value">2/3 vs 1/3</div>
+    <div class="sub">first/last-frame vs keyframe → video</div></div>
+  <div class="stat"><div class="label">Cost per accepted second</div>
+    <div class="value">$0.0116</div>
+    <div class="sub">warm H100 time, every attempt counted</div></div>
+  <div class="stat"><div class="label">One 5 s Wan 2.2 clip, warm</div>
+    <div class="value">$0.025</div>
+    <div class="sub">22 s inference · 832×480 · 4-step</div></div>
+  <div class="stat"><div class="label">Fixing a too-small face</div>
+    <div class="value">~$0.003</div>
+    <div class="sub">one re-framed keyframe, vs 3.6× clip cost at 720p</div></div>
+</div>
+
+<div class="card">
+  <h2>Same script, same character, three ways to chain it</h2>
+  <p class="lede">A 3-shot script (a street at dawn, a café counter, a café window) through three workflow
+  versions. Each shot's clip must pass the identity gate: p10 similarity ≥ 0.5 over the frames that can be
+  scored.</p>
+  <div class="trio"><figure><video src="media/keyframe_i2v-2.mp4" muted playsinline loop controls autoplay preload="auto"></video><figcaption><b>Keyframe → video (an agent&#x27;s usual recipe)</b><br><code>keyframe_i2v@2</code> · 2/3 shots passed the identity gate</figcaption></figure><figure><video src="media/keyframe_flf-1.mp4" muted playsinline loop controls autoplay preload="auto"></video><figcaption><b>Start + end keyframes → first/last-frame video</b><br><code>keyframe_flf@1</code> · 2/3 shots passed the identity gate</figcaption></figure><figure><video src="media/lastframe_chain-1.mp4" muted playsinline loop controls autoplay preload="auto"></video><figcaption><b>Chain each clip off the last frame</b><br><code>lastframe_chain@1</code> · 0/3 shots passed the identity gate</figcaption></figure></div>
+  <p class="hint"><button id="play">Play all three from the start</button></p>
+  <div class="scroll"><table><thead><tr><th>Workflow</th><th class="num">Accepted</th><th class="num">First try</th><th class="num">Min p10</th><th class="num">Attempts</th><th class="num">Warm $</th><th class="num">$ / accepted s</th></tr></thead><tbody><tr><td><code>keyframe_i2v@2</code></td><td class="num win">2/3</td><td class="num">1/3</td><td class="num">0.50</td><td class="num">10</td><td class="num">$0.129</td><td class="num">$0.0127</td></tr><tr><td><code>keyframe_flf@1</code></td><td class="num win">2/3</td><td class="num win">2/3</td><td class="num win">0.52</td><td class="num">12</td><td class="num win">$0.117</td><td class="num win">$0.0116</td></tr><tr><td><code>lastframe_chain@1</code></td><td class="num">0/3</td><td class="num">0/3</td><td class="num">–</td><td class="num">9</td><td class="num">$0.142</td><td class="num">–</td></tr></tbody></table></div>
+  <p class="take"><b>Chaining off the last frame can't change scenes.</b> Shots 2 and 3 never reach the café: in
+  the "café window" shot she's still on the street. Its faces stay too small to verify, so nothing ships.
+  <b>Re-anchoring with start and end keyframes beat the usual keyframe → video recipe:</b> both verifiable shots
+  passed on the first try, identity was higher, and cost per accepted second was
+  9% lower even with an extra keyframe per shot,
+  because no clip had to be re-rolled. One character and one seed, so read it as a direction, not a result.
+  <a href="deep/scoreboard-chains.html">Full scoreboard →</a></p>
+</div>
+
+<div class="card">
+  <h2>A number you can trust, and knowing when you can't</h2>
+  <p class="lede">The first run scored every frame and got a clip mean of 0.33, min
+  0.01: it looked like the face drifted. It mostly hadn't. She turns toward a window, and
+  ArcFace collapses on profiles even for the right person. The judge now leaves out frames turned past
+  45°, frames with a hand over the face, and faces under 64 px, and returns
+  <b>pass</b>, <b>fail</b> or <b>unverifiable</b> instead of a misleading low score.</p>
+  <div class="chart-row">
+    <figure style="margin:0"><video id="clip" src="media/pose-clip.mp4" controls loop muted playsinline></video>
+      <figcaption>Same clip, re-judged on CPU (no GPU, $0): mean 0.33 →
+      0.67, min 0.01 → 0.61,
+      76% of frames profile.</figcaption></figure>
+    <div class="chart-wrap"><svg class="chart" viewBox="0 0 720 260" role="img" aria-label="Identity similarity per frame"><rect x="192.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="225.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="258.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="291.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="324.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="357.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="390.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="423.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="456.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="489.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="522.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="555.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="588.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="621.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="654.5" y="16" width="33.0" height="208" fill="var(--band)"/><rect x="687.5" y="16" width="16.5" height="208" fill="var(--band)"/><text x="213.0" y="28">profile · not scored</text><line x1="44" x2="704" y1="224.0" y2="224.0" stroke="var(--grid)"/><text x="36" y="228.0" text-anchor="end">0.00</text><line x1="44" x2="704" y1="172.0" y2="172.0" stroke="var(--grid)"/><text x="36" y="176.0" text-anchor="end">0.25</text><line x1="44" x2="704" y1="120.0" y2="120.0" stroke="var(--grid)"/><text x="36" y="124.0" text-anchor="end">0.50</text><line x1="44" x2="704" y1="68.0" y2="68.0" stroke="var(--grid)"/><text x="36" y="72.0" text-anchor="end">0.75</text><line x1="44" x2="704" y1="16.0" y2="16.0" stroke="var(--grid)"/><text x="36" y="20.0" text-anchor="end">1.00</text><text x="44.0" y="246" text-anchor="middle">0</text><text x="143.0" y="246" text-anchor="middle">12</text><text x="242.0" y="246" text-anchor="middle">24</text><text x="341.0" y="246" text-anchor="middle">36</text><text x="440.0" y="246" text-anchor="middle">48</text><text x="539.0" y="246" text-anchor="middle">60</text><text x="638.0" y="246" text-anchor="middle">72</text><text x="704.0" y="246" text-anchor="middle">80</text><text x="374.0" y="259" text-anchor="middle">frame</text><line x1="44" x2="704" y1="65.1" y2="65.1" stroke="var(--ref)" stroke-width="1" stroke-dasharray="4 4"/><text x="704" y="59.1" text-anchor="end">keyframe 0.76</text><polyline points="44.0,76.2 77.0,76.4 110.0,77.8 143.0,90.0 176.0,98.0 209.0,97.2 242.0,110.8 275.0,122.9 308.0,132.2 341.0,146.2 374.0,158.0 407.0,165.4 440.0,184.3 473.0,200.6 506.0,219.8 539.0,210.9 572.0,215.2 605.0,218.0 638.0,221.8 671.0,219.9 704.0,214.5" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="44.0" cy="76.2" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="77.0" cy="76.4" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="110.0" cy="77.8" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="143.0" cy="90.0" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="176.0" cy="98.0" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="209.0" cy="97.2" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="242.0" cy="110.8" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="275.0" cy="122.9" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="308.0" cy="132.2" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="341.0" cy="146.2" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="374.0" cy="158.0" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="407.0" cy="165.4" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="440.0" cy="184.3" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="473.0" cy="200.6" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="506.0" cy="219.8" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="539.0" cy="210.9" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="572.0" cy="215.2" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="605.0" cy="218.0" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="638.0" cy="221.8" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="671.0" cy="219.9" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><circle cx="704.0" cy="214.5" r="4" fill="var(--text-muted)" stroke="var(--surface-1)" stroke-width="2"/><line id="playhead" x1="44" x2="44" y1="16" y2="224" stroke="var(--text-primary)" stroke-width="1" opacity="0.5"/><line id="crosshair" x1="0" x2="0" y1="16" y2="224" stroke="var(--text-muted)" stroke-width="1" visibility="hidden"/><rect id="hit" x="44" y="16" width="660" height="208" fill="transparent" style="cursor:pointer"/></svg>
+      <div class="tooltip" id="tip"></div>
+      <p class="hint">Similarity per sampled frame. Shaded frames are profile and not scored; diamonds mark a hand
+      on the face. Hover for values, click to seek. <a href="deep/run-pose-aware.html">Run page →</a></p></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Fix it at the cheap step</h2>
+  <p class="lede">Shot 1's face was 79 px wide in the keyframe, about 53 px in the 480p clip, so every frame was
+  unverifiable. Rendering clips at 720p made it measurable, but at 3.6× the clip cost. The framing check predicts
+  the clip's face size from the keyframe and re-frames <i>the keyframe</i> instead, for about $0.003.</p>
+  <div class="pair">
+    <figure><img src="media/s1-before.jpg" alt="Wide keyframe, small face"><figcaption>Before: face
+      79 px, keyframe identity 0.52</figcaption></figure>
+    <figure><img src="media/s1-after.jpg" alt="Re-framed keyframe, large face"><figcaption>After one re-frame:
+      face 244 px, keyframe identity 0.84</figcaption></figure>
+  </div>
+  <div class="scroll"><table><thead><tr><th>Workflow</th><th class="num">Accepted</th><th class="num">Warm $</th><th class="num">$ / accepted s</th></tr></thead><tbody><tr><td><code>keyframe_flf@2</code></td><td class="num">2/3</td><td class="num win">$0.120</td><td class="num win">$0.0118</td></tr><tr><td><code>keyframe_flf@3</code></td><td class="num">2/3</td><td class="num">$0.345</td><td class="num">$0.0341</td></tr><tr><td><code>keyframe_flf@4</code></td><td class="num">2/3</td><td class="num">$0.122</td><td class="num">$0.0121</td></tr></tbody></table></div>
+  <p class="take">Shot 1 in each: <code>@2</code> unverifiable (0% scorable),
+  <code>@3</code> fail at p10 0.44,
+  <code>@4</code> fail at p10 0.48, the same answer as 720p for a
+  third of the cost. The answer is honest: once the face is big enough to measure, this shot <i>does</i> drift,
+  so lowering the threshold would have shipped a bad clip.
+  <a href="deep/scoreboard-framing.html">Full scoreboard →</a></p>
+</div>
+
+<div class="card" id="how">
+  <h2>How it works</h2>
+  <div class="cols">
+    <div>
+      <ol class="steps">
+        <li><b>Character</b>: one portrait → ArcFace embedding.</li>
+        <li><b>Keyframes</b>: Qwen-Image-Edit-2511 composes each shot's start (and end) still from the portrait.
+          Gated: identity, plus a face-size and camera-direction check, re-rolled or re-prompted by cause.</li>
+        <li><b>Clips</b>: Wan 2.2 I2V A14B animates between keyframes. Gated the same way.</li>
+        <li><b>Stitch</b>: ffmpeg concat. One failed shot degrades the run; it doesn't fail it.</li>
+        <li><b>Every step is content-addressed</b>: <code>sha256(step, model@rev, params, inputs, seed)</code>.
+          A re-run or a new workflow version only computes what changed, so A/B arms share upstream work.</li>
+        <li><b>On Modal</b>: one GPU class per model family, weights on a Volume, a CPU orchestrator and a FastAPI
+          layer that scale on their own. 106 unit tests run in CI without a GPU.</li>
+      </ol>
+    </div>
+    <div>
+<pre>POST /v1/workflows/keyframe_flf@4/runs
+Idempotency-Key: cafe-morning-c01-1
+
+202 {
+  "request_id": "req_6e1e633dc910",
+  "status": "queued",
+  "replayed": false,
+  "estimate": { "usd_low": 0.081, "usd_high": 1.267 },
+  "status_url": "…/v1/runs/req_6e1e633dc910",
+  "cancel_url": "…/v1/runs/req_6e1e633dc910/cancel",
+  "result_url": "…/v1/runs/req_6e1e633dc910/result"
+}</pre>
+      <p class="hint">Async submit, poll and cancel; an <code>Idempotency-Key</code> replays the original run instead
+      of paying twice; the run reports per-shot attempts, verdicts and billed GPU time. The estimate is priced
+      from measured timings before anything runs (here for 3 shots: best case vs every retry and a cold
+      start).</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>What a run costs</h2>
+  <div class="scroll"><table><thead><tr><th>Step</th><th>Model</th><th class="num">Cold load</th>
+  <th class="num">Inference</th><th class="num">$ (cold)</th><th class="num">$ (warm)</th></tr></thead><tbody>
+  <tr><td>Keyframe</td><td>Qwen-Image-Edit-2511, 4-step Lightning</td><td class="num">57 s</td>
+    <td class="num">5.4 s</td><td class="num">$0.068</td>
+    <td class="num">$0.006</td></tr>
+  <tr><td>Clip</td><td>Wan 2.2 I2V A14B, 4-step Lightning</td><td class="num">227 s</td>
+    <td class="num">22.4 s</td><td class="num">$0.274</td>
+    <td class="num">$0.025</td></tr>
+  </tbody></table></div>
+  <p class="take">Warm inference is already cheap and fast; <b>the cost is the cold start</b>. Wan's weights take
+  over three minutes to load and cast, so most of a small run's bill is model loading. Re-saved bf16 weights plus
+  Modal memory snapshots are the next step.</p>
+</div>
+
+<div class="card" id="next">
+  <h2>What's next</h2>
+  <ul>
+    <li><b>Six shots, one API call.</b> A 30-second script through the API to a stitched video and a run page.</li>
+    <li><b>Retry ladder as config:</b> same → degrade → alternate model → fallback shot, so an agent's retry rules
+      become testable code with bounded cost.</li>
+    <li><b>Calibration:</b> fit the identity threshold to face size on hand-labeled frames, and use the gate to
+      measure how often an LLM critic agrees with it.</li>
+    <li><b>Cold starts:</b> bf16 weights and memory snapshots, with a before/after table.</li>
+    <li><b>More arms:</b> full-step vs 4-step Wan, and hosted video APIs behind the same adapter interface.</li>
+  </ul>
+</div>
+
+<footer>Built by Peter Hyland. All characters are generated; no real people. Numbers come from runs on
+Oct 29–Nov 3, 2026 (one character, one seed per arm) and are regenerated from the run records by
+<code>castbook/site.py</code>. <a href="https://github.com/peterhyland0/castbook">github.com/peterhyland0/castbook</a></footer>
+</main>
+<script>
+const D = {"fps": 16, "n_frames": 81, "per_frame": [{"frame": 0, "sim": 0.7105, "yaw": 21.1, "hand_overlap": 0.0, "n_hands": 0, "face_box": [252, 74, 376, 250], "hand_boxes": [], "det_score": 0.888, "emb_norm": 18.38, "profile": false, "occluded": false, "status": "scored"}, {"frame": 4, "sim": 0.7094, "yaw": 21.4, "hand_overlap": 0.0, "n_hands": 0, "face_box": [251, 71, 376, 250], "hand_boxes": [], "det_score": 0.887, "emb_norm": 18.76, "profile": false, "occluded": false, "status": "scored"}, {"frame": 8, "sim": 0.7028, "yaw": 23.2, "hand_overlap": 0.0, "n_hands": 0, "face_box": [250, 70, 377, 249], "hand_boxes": [], "det_score": 0.875, "emb_norm": 18.38, "profile": false, "occluded": false, "status": "scored"}, {"frame": 12, "sim": 0.6444, "yaw": 27.7, "hand_overlap": 0.0, "n_hands": 0, "face_box": [252, 67, 377, 246], "hand_boxes": [], "det_score": 0.842, "emb_norm": 20.15, "profile": false, "occluded": false, "status": "scored"}, {"frame": 16, "sim": 0.6058, "yaw": 34.8, "hand_overlap": 0.0, "n_hands": 0, "face_box": [255, 67, 378, 243], "hand_boxes": [], "det_score": 0.828, "emb_norm": 20.09, "profile": false, "occluded": false, "status": "scored"}, {"frame": 20, "sim": 0.6094, "yaw": 46.2, "hand_overlap": 0.0, "n_hands": 0, "face_box": [261, 60, 377, 241], "hand_boxes": [], "det_score": 0.828, "emb_norm": 20.46, "profile": true, "occluded": false, "status": "profile"}, {"frame": 24, "sim": 0.5441, "yaw": 66.9, "hand_overlap": 0.0, "n_hands": 0, "face_box": [270, 57, 381, 237], "hand_boxes": [], "det_score": 0.824, "emb_norm": 19.61, "profile": true, "occluded": false, "status": "profile"}, {"frame": 28, "sim": 0.4859, "yaw": 81.7, "hand_overlap": 0.0, "n_hands": 0, "face_box": [281, 58, 387, 234], "hand_boxes": [], "det_score": 0.829, "emb_norm": 16.95, "profile": true, "occluded": false, "status": "profile"}, {"frame": 32, "sim": 0.4415, "yaw": 86.5, "hand_overlap": 0.0, "n_hands": 0, "face_box": [285, 65, 388, 228], "hand_boxes": [], "det_score": 0.746, "emb_norm": 16.12, "profile": true, "occluded": false, "status": "profile"}, {"frame": 36, "sim": 0.3739, "yaw": 89.1, "hand_overlap": 0.0, "n_hands": 0, "face_box": [290, 70, 387, 222], "hand_boxes": [], "det_score": 0.744, "emb_norm": 13.88, "profile": true, "occluded": false, "status": "profile"}, {"frame": 40, "sim": 0.3171, "yaw": 88.2, "hand_overlap": 0.0, "n_hands": 1, "face_box": [295, 68, 387, 220], "hand_boxes": [[454, 379, 537, 457]], "det_score": 0.717, "emb_norm": 12.98, "profile": true, "occluded": false, "status": "profile"}, {"frame": 44, "sim": 0.2817, "yaw": 87.2, "hand_overlap": 0.0, "n_hands": 1, "face_box": [293, 69, 392, 222], "hand_boxes": [[458, 302, 530, 385]], "det_score": 0.698, "emb_norm": 13.51, "profile": true, "occluded": false, "status": "profile"}, {"frame": 48, "sim": 0.1907, "yaw": 86.3, "hand_overlap": 0.0, "n_hands": 1, "face_box": [304, 75, 398, 224], "hand_boxes": [[474, 243, 525, 320]], "det_score": 0.674, "emb_norm": 12.77, "profile": true, "occluded": false, "status": "profile"}, {"frame": 52, "sim": 0.1124, "yaw": 87.7, "hand_overlap": 0.0, "n_hands": 1, "face_box": [321, 88, 410, 228], "hand_boxes": [[473, 222, 518, 301]], "det_score": 0.674, "emb_norm": 13.3, "profile": true, "occluded": false, "status": "profile"}, {"frame": 56, "sim": 0.0201, "yaw": 89.2, "hand_overlap": 0.0, "n_hands": 1, "face_box": [329, 94, 421, 232], "hand_boxes": [[465, 205, 509, 290]], "det_score": 0.689, "emb_norm": 14.46, "profile": true, "occluded": false, "status": "profile"}, {"frame": 60, "sim": 0.0631, "yaw": 87.4, "hand_overlap": 0.0, "n_hands": 2, "face_box": [344, 104, 436, 239], "hand_boxes": [[456, 190, 499, 291], [463, 375, 543, 447]], "det_score": 0.687, "emb_norm": 14.06, "profile": true, "occluded": false, "status": "profile"}, {"frame": 64, "sim": 0.0422, "yaw": 85.2, "hand_overlap": 0.0, "n_hands": 0, "face_box": [348, 110, 439, 246], "hand_boxes": [], "det_score": 0.695, "emb_norm": 15.36, "profile": true, "occluded": false, "status": "profile"}, {"frame": 68, "sim": 0.0289, "yaw": 89.6, "hand_overlap": 0.0, "n_hands": 1, "face_box": [353, 118, 444, 249], "hand_boxes": [[468, 280, 548, 386]], "det_score": 0.704, "emb_norm": 14.47, "profile": true, "occluded": false, "status": "profile"}, {"frame": 72, "sim": 0.0106, "yaw": 89.4, "hand_overlap": 0.0, "n_hands": 2, "face_box": [355, 123, 446, 255], "hand_boxes": [[462, 270, 540, 380], [464, 186, 512, 283]], "det_score": 0.676, "emb_norm": 14.74, "profile": true, "occluded": false, "status": "profile"}, {"frame": 76, "sim": 0.0196, "yaw": 88.5, "hand_overlap": 0.0, "n_hands": 2, "face_box": [353, 116, 445, 255], "hand_boxes": [[460, 284, 537, 390], [469, 182, 522, 283]], "det_score": 0.644, "emb_norm": 14.34, "profile": true, "occluded": false, "status": "profile"}, {"frame": 80, "sim": 0.0459, "yaw": 85.3, "hand_overlap": 0.0, "n_hands": 2, "face_box": [346, 113, 441, 255], "hand_boxes": [[460, 290, 532, 396], [456, 187, 523, 282]], "det_score": 0.658, "emb_norm": 13.81, "profile": true, "occluded": false, "status": "profile"}], "W": 720, "PAD_L": 44, "PAD_R": 16};
+const svg = document.querySelector("svg.chart"), tip = document.getElementById("tip");
+const video = document.getElementById("clip"), hit = document.getElementById("hit");
+const cross = document.getElementById("crosshair"), play = document.getElementById("playhead");
+const span = D.W - D.PAD_L - D.PAD_R;
+const xOf = f => D.PAD_L + span * f / Math.max(D.n_frames - 1, 1);
+function toFrame(evt) {
+  const pt = svg.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  return Math.max(0, Math.min(D.n_frames - 1, (p.x - D.PAD_L) / span * (D.n_frames - 1)));
+}
+function nearest(f) {
+  return D.per_frame.reduce((a, b) => Math.abs(b.frame - f) < Math.abs(a.frame - f) ? b : a);
+}
+hit.addEventListener("mousemove", e => {
+  const p = nearest(toFrame(e)), x = xOf(p.frame);
+  cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
+  tip.innerHTML = `<b>frame ${p.frame}</b> · ${(p.frame / D.fps).toFixed(2)} s<br>` +
+    (p.sim === null ? "no face detected" : `similarity ${p.sim.toFixed(3)}`) +
+    (p.yaw == null ? "" : `<br>yaw ${p.yaw.toFixed(0)}°${p.profile ? " · profile" : ""}`) +
+    (p.hand_overlap == null ? "" : `<br>hand covers ${(p.hand_overlap * 100).toFixed(0)}% of face${p.occluded ? " · occluded" : ""}`) +
+    (p.status && p.status !== "scored" && p.status !== "no_face" ? "<br><i>not scored</i>" : "");
+  const box = svg.getBoundingClientRect(), wrap = svg.parentElement.getBoundingClientRect();
+  const px = (x / D.W) * box.width;
+  tip.style.display = "block";
+  tip.style.left = Math.min(px + 12, box.width - tip.offsetWidth) + "px";
+  tip.style.top = (e.clientY - wrap.top - 40) + "px";
+});
+hit.addEventListener("mouseleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
+hit.addEventListener("click", e => { video.pause(); video.currentTime = nearest(toFrame(e)).frame / D.fps; });
+function tick() {
+  const x = xOf(Math.min(D.n_frames - 1, video.currentTime * D.fps));
+  play.setAttribute("x1", x); play.setAttribute("x2", x);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+<script>
+document.getElementById("play").addEventListener("click", () => {
+  document.querySelectorAll(".trio video").forEach(v => { v.currentTime = 0; v.play(); });
+});
+</script>
+</body></html>
