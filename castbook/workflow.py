@@ -6,6 +6,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from castbook.shots import Camera
+
 WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / "workflows"
 
 Cause = Literal["small", "profile", "occluded", "no_face"]  # identity.CAUSES
@@ -47,6 +49,22 @@ class StepConfig(BaseModel):
     retry: RetryPolicy | None = None
 
 
+class CameraCheck(BaseModel):
+    """Keep the end keyframe's framing consistent with the shot's `camera` (closer, wider, steady).
+
+    The end keyframe is checked against the chosen start keyframe's face width: `closer` must not shrink it by more
+    than `tolerance`, `wider` must not grow it by more, `steady` must stay within it either way. This catches a
+    reversed beat (the shot pulls back while the script walks toward the camera); it does not enforce how much the
+    framing moves. A miss is re-prompted with `suffix[camera]`. When the start keyframe was itself re-framed for a
+    small face, the script's absolute shot sizes in `end` no longer describe the start, so the end keyframe gets the
+    relative `suffix[camera]` from its first attempt.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    tolerance: float = 0.15
+    suffix: dict[Camera, str] = {}
+
+
 class Framing(BaseModel):
     """Catch a too-small face at the keyframe, where a retry costs ~$0.003, not at the clip (~$0.02 at 480p).
 
@@ -60,6 +78,7 @@ class Framing(BaseModel):
     model_config = ConfigDict(extra="forbid")
     min_clip_face_px: float = 64  # match the judge's min_face_px so a predicted pass is scorable
     clip_sizes: list[tuple[int, int]]  # (width, height), cheapest first
+    camera: CameraCheck | None = None
 
 
 # How shots are conditioned (see dag.py):

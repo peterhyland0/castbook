@@ -59,3 +59,12 @@ def test_short_error_keeps_the_last_line():
     assert _short_error(tb) == "torch.OutOfMemoryError: CUDA out of memory."
     assert _short_error(None) == "no clip"
     assert len(_short_error("x" * 500)) == 200
+
+
+def test_flf_shots_report_start_and_end_keyframe_faces(tmp_path):
+    from tests.test_dag import SizedBackend, _faces
+
+    s = summarize(_arm(tmp_path, "keyframe_flf@5", SizedBackend(rules=_faces(lambda p: 150, lambda p: 180))))
+    assert [(x["keyframe_face_px"], x["end_keyframe_face_px"]) for x in s["shots"]] == [(150, 180)] * 3
+    page = render(tmp_path, [s], _script(3, end=True).model_dump()).read_text()
+    assert "keyframe face 150 → 180 px" in page

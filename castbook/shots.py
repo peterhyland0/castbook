@@ -2,15 +2,20 @@
 
 A script names a character and a list of shots, each with a keyframe prompt
 (what the still looks like), a motion prompt (what happens in the clip) and,
-for first-last-frame workflows, an end prompt (where the shot ends up).
+for first-last-frame workflows, an end prompt (where the shot ends up). `camera`
+says how the framing moves from start to end (closer, wider or steady), so a
+workflow with a camera check can catch an end keyframe that contradicts the beat.
 For now scripts are written by hand; an LLM planner that turns a one-line idea
 into a script is the next step and will produce this same structure.
 """
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
+
+Camera = Literal["closer", "wider", "steady"]  # how the face size changes from start to end keyframe
 
 
 class ShotSpec(BaseModel):
@@ -19,6 +24,7 @@ class ShotSpec(BaseModel):
     keyframe: str = Field(min_length=1)
     motion: str = Field(min_length=1)
     end: str | None = Field(default=None, min_length=1)
+    camera: Camera | None = None
 
 
 class Script(BaseModel):

@@ -27,3 +27,11 @@ def test_costs_only_charge_load_on_cold_call():
     warm = StepTiming(gpu="H100", load_s=0, infer_s=20, cold=False)
     assert cold.usd == pytest.approx(120 * GPU_USD_PER_SECOND["H100"], abs=1e-6)
     assert total_usd([cold, warm]) == pytest.approx(140 * GPU_USD_PER_SECOND["H100"], abs=1e-5)
+
+
+def test_eval_scripts_load_and_declare_camera_for_flf():
+    from castbook.shots import load_script
+
+    for path in sorted((WORKFLOWS_DIR.parent / "evals" / "scripts").glob("*.yaml")):
+        script = load_script(path)
+        assert all(s.camera for s in script.shots if s.end), f"{path.name}: an FLF shot has no camera"

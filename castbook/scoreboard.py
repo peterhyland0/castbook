@@ -57,6 +57,7 @@ def summarize(result: dict) -> dict:
         # one attempt per gated step, and it passed (a re-framed keyframe passes identity but took a retry)
         first_try = all(len(s[f]) == 1 and s[f][0]["verdict"]["status"] == "pass" for f in _GATED if s.get(f))
         kf = _chosen(s.get("keyframe_attempts", []), s.get("keyframe_key"))
+        end_kf = _chosen(s.get("end_keyframe_attempts", []), s.get("end_keyframe_key"))
         shots.append(
             {
                 "shot_id": s["shot_id"],
@@ -69,6 +70,7 @@ def summarize(result: dict) -> dict:
                 "first_try_pass": bool(first_try and s["clip_attempts"]),
                 "attempts": {f.removesuffix("_attempts"): len(s.get(f, [])) for f in _GATED if s.get(f)},
                 "keyframe_face_px": kf.get("face_px") if kf else None,
+                "end_keyframe_face_px": end_kf.get("face_px") if end_kf else None,
                 "clip_size": s.get("clip_size") or (clip_params["width"], clip_params["height"]),
             }
         )
@@ -161,8 +163,12 @@ def render(out_dir: Path, arms: list[dict], script: dict) -> Path:
             tries = " · ".join(f"{k} ×{v}" for k, v in s["attempts"].items())
             size = s.get("clip_size")
             if size:
-                face = s.get("keyframe_face_px")
-                tries += f" · clip {size[0]}×{size[1]}" + (f" · keyframe face {face:.0f} px" if face else "")
+                face, end_face = s.get("keyframe_face_px"), s.get("end_keyframe_face_px")
+                tries += f" · clip {size[0]}×{size[1]}"
+                if face and end_face:
+                    tries += f" · keyframe face {face:.0f} → {end_face:.0f} px"
+                elif face:
+                    tries += f" · keyframe face {face:.0f} px"
             why = "; ".join(r for r in s["reasons"] if r)
             cells.append(
                 f"<td>{_chip(s['clip_status'], label)}"

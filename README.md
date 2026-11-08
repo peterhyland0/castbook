@@ -180,6 +180,44 @@ A keyframe that would come out under 64 px is re-framed at the keyframe step, an
   planner should write identity-critical beats tighter to begin with.
 - Billed $0.27 plus about $0.26 of idle tail (image and video workers both cold).
 
+## M3: keep re-framed shots coherent (FLF @5)
+
+`@4` fixed s1's small face by re-framing the start keyframe to a close-up, but the end keyframe was still prompted
+"waist-up" and came out wider (244 → 108 px), so the clip pulled back on a walk-toward-camera beat. `keyframe_flf@5`
+adds a camera check (`framing.camera` in the workflow):
+
+- **Scripts say which way the framing moves.** Each shot has `camera: closer | wider | steady`
+  (`evals/scripts/cafe_morning.yaml`: s1 closer, s2 steady, s3 closer). An LLM planner would emit the same field.
+- **The end keyframe is checked against the start.** Its face width over the chosen start's must not reverse the
+  beat by more than 15% (`closer` ≥ 0.85×, `wider` ≤ 1.15×, `steady` within ±15%). A miss is a framing cause
+  (`camera`) like `small`: identity passed, so it re-prompts with a relative instruction ("Framed at least as close as
+  Picture 1") and then re-rolls. It checks direction, not how far the camera moves.
+- **A re-framed start re-derives the end.** When the start came from a small-face re-prompt, the script's absolute
+  shot sizes no longer describe it, so the end keyframe gets the relative instruction from its first attempt.
+- **Shots that already agree stay cached.** s2 (151 → 149 px) and s3 (201 → 202 px) pass the check with `@4`'s
+  artifacts, so a `@4 → @5` re-run only regenerates s1's end keyframe and clip.
+
+**Run (`out/scoreboard/cafe_morning_20261103-204957/`, `@4` vs `@5`):**
+
+| Workflow | s1 keyframe faces (start → end) | End keyframe attempts | s1 clip | Accepted | Warm $ | $/accepted s |
+|---|---|---|---|---|---|---|
+| `keyframe_flf@4` | 244 → 108 px (0.44×, pulls back) | 1 | fail, p10 0.48 / 0.43 | 2/3 | $0.122 | $0.0121 |
+| `keyframe_flf@5` (camera check) | 244 → 113–123 px over 5 seeds (best 121, 0.50×) | 5, all flagged `camera` | fail, p10 0.44 / 0.40 | 2/3 | $0.144 | $0.0142 |
+
+- **The check works; the prompt fix doesn't.** Every one of the five end keyframes was flagged: identity passed
+  (0.75–0.77), but the face was half the start's width on a `closer` beat. The relative instruction ("Framed at least
+  as close as Picture 1") was on all five prompts and moved the face only from 108 to about 120 px.
+- **The likely cause is the conflicting prompt.** The script's end text still says "fills a medium shot from the waist
+  up", and Qwen-Image-Edit follows that absolute shot size over the appended relative one. Re-rolling seeds can't fix
+  a prompt that asks for two framings.
+- **s2 and s3 were untouched.** Both passed the check on `@4`'s cached artifacts (151 → 149 and 201 → 202 px), so only
+  s1's end keyframe and clip were regenerated. s1's clip still fails identity (p10 0.44 and 0.40), so the drift
+  diagnosis from `@4` stands.
+- **Cost:** billed $0.27 (5 end keyframes, 2 clips, both workers cold), plus idle tail.
+- **Next:** when the start was re-framed, don't send the script's absolute end framing at all. Either have the
+  planner write a `closer`-relative end for re-framed shots, or fall back to start-frame-only I2V for that shot,
+  which is a "degrade" step on the retry ladder.
+
 ## Layout
 
 ```

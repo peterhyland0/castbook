@@ -19,8 +19,9 @@ The identity gate decides each attempt's fate (see workflow.RetryPolicy):
 `pass` stops, `fail` re-rolls with a new seed, `unverifiable` re-prompts once
 to keep the face visible and then re-rolls. With a `framing` block, a keyframe
 that passes but whose face would be too small in the clip is re-framed the
-same way, and each shot's clip size is picked from its keyframes' face size. When attempts run out the best one
-is kept and the shot is marked degraded; one bad shot never fails the run.
+same way, and each shot's clip size is picked from its keyframes' face size. With a camera check, an end keyframe
+whose framing contradicts the shot's `camera` (pulls back on a `closer` beat) is re-framed too. When attempts run
+out the best one is kept and the shot is marked degraded; one bad shot never fails the run.
 
 This module has no Modal imports: the GPU work sits behind `Backend`, so the
 orchestration logic is tested with fakes.
@@ -38,7 +39,7 @@ from castbook.config import MODELS
 from castbook.costs import StepTiming
 from castbook.hashing import sha256_bytes, step_key
 from castbook.identity import blocking_cause
-from castbook.shots import Script, ShotSpec
+from castbook.shots import Camera, Script, ShotSpec
 from castbook.store import ArtifactStore
 from castbook.workflow import RetryPolicy, Workflow
 
@@ -74,7 +75,9 @@ class Attempt:
     score: dict
     timing: dict | None  # what producing this artifact cost; on a hit, the cost recorded when it was made
     face_px: float | None = None  # keyframes: detected face width, for the framing check
-    framing: str | None = None  # "small" when identity passed but the clip's face would be too small to score
+    # set when identity passed but the framing didn't: "small" (the clip's face would be too small to score) or
+    # "camera" (the end keyframe's framing contradicts the shot's camera direction)
+    framing: str | None = None
 
     @property
     def rank(self) -> tuple[int, bool, float]:
@@ -205,9 +208,12 @@ class Executor:
         judge: Callable[[bytes], dict],
         name: str,
         framing: Callable[[Attempt], str | None] | None = None,
+        framing_suffixes: dict[str, str] | None = None,
     ) -> list[Attempt]:
+        """`framing_suffixes` adds re-prompts for framing causes beyond the policy's `reprompt_by_cause`."""
         cfg = self.wf.steps[step]
         policy = cfg.retry or RetryPolicy(max_attempts=1)
+        by_cause = {**policy.reprompt_by_cause, **(framing_suffixes or {})}
         attempts: list[Attempt] = []
         reprompts = 0
         for n in range(policy.max_attempts):
@@ -235,12 +241,12 @@ class Executor:
             if status == "pass" and attempt.framing is None:
                 break
             if attempt.framing:  # identity is fine, the framing isn't: only a cause-specific suffix helps
-                suffix = policy.reprompt_by_cause.get(attempt.framing, "")
+                suffix = by_cause.get(attempt.framing, "")
             elif status == "unverifiable":
                 suffix = policy.suffix_for(blocking_cause(attempt.score))
             else:
                 suffix = ""
-            if suffix and reprompts < policy.max_reprompts:
+            if suffix and suffix not in prompt and reprompts < policy.max_reprompts:
                 prompt = prompt + suffix
                 reprompts += 1
         return attempts
@@ -290,16 +296,26 @@ class Executor:
             end = None
             if self.wf.mode == "keyframe_flf":
                 end_params = self.wf.steps["end_keyframe"].params
+                end_prompt = end_params["prompt_template"].format(end=shot.end)
+                end_check, end_suffixes = framing, None
+                start_kf = best(result.keyframe_attempts) if result.keyframe_attempts else None
+                cam = self.wf.framing.camera if self.wf.framing else None
+                if cam and shot.camera and start_kf and start_kf.face_px:
+                    end_check = _camera_check(framing, shot.camera, start_kf.face_px, cam.tolerance)
+                    end_suffixes = {"camera": cam.suffix.get(shot.camera, "")}
+                    if self._reframed(start_kf):  # the script's shot sizes describe the old start: go relative
+                        end_prompt += end_suffixes["camera"]
                 result.end_keyframe_attempts = self._attempts(
                     "end_keyframe",
                     i,
                     seed,
-                    end_params["prompt_template"].format(end=shot.end),
+                    end_prompt,
                     [result.keyframe_key, portrait_sha],
                     lambda p, s: self.backend.keyframe([start, portrait], p, s, end_params),
                     score_image,
                     "end_keyframe.png",
-                    framing,
+                    end_check,
+                    end_suffixes,
                 )
                 gated.append(best(result.end_keyframe_attempts))
                 result.end_keyframe_key = gated[-1].key
@@ -343,6 +359,12 @@ class Executor:
             return "small" if small else None
 
         return check
+
+    def _reframed(self, keyframe: Attempt) -> bool:
+        """Did this keyframe come from a small-face re-prompt?"""
+        retry = self.wf.steps["keyframe"].retry
+        small = retry.reprompt_by_cause.get("small") if retry else None
+        return bool(small) and small in keyframe.prompt
 
     def _clip_size(self, faces: list[float | None], kf_width: int | None) -> tuple[int, int] | None:
         """Cheapest clip size whose predicted face clears the bar; the largest if none does."""
@@ -422,6 +444,27 @@ class Executor:
             timings=list(self.cache.timings),
             wall_s=round(time.perf_counter() - t0, 1),
         )
+
+
+def _camera_check(
+    small: Callable[[Attempt], str | None] | None, camera: Camera, start_face: float, tolerance: float
+) -> Callable[[Attempt], str | None]:
+    """End keyframe check (see workflow.CameraCheck): the small-face check first, then the face size ratio to the
+    start keyframe against the shot's camera direction."""
+
+    def check(a: Attempt) -> str | None:
+        cause = small(a) if small else None
+        if cause or a.face_px is None:
+            return cause
+        ratio = a.face_px / start_face
+        reversed_ = {
+            "closer": ratio < 1 - tolerance,
+            "wider": ratio > 1 + tolerance,
+            "steady": abs(ratio - 1) > tolerance,
+        }[camera]
+        return "camera" if reversed_ else None
+
+    return check
 
 
 def _brief(a: Attempt) -> dict:

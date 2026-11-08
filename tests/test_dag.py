@@ -377,3 +377,76 @@ def test_rank_prefers_well_framed_passes():
     small = Attempt("keyframe", 0, 1, "p", "k0", "miss", {**v, "value": 0.9}, {}, None, framing="small")
     ok = Attempt("keyframe", 1, 2, "p", "k1", "miss", v, {}, None)
     assert best([small, ok]) is ok
+
+
+WF5 = load_workflow("keyframe_flf@5")
+CAM = WF5.framing.camera.suffix
+
+
+def _cam_script(camera):
+    shot = ShotSpec(id="s0", keyframe="kf 0", motion="mv 0", end="end 0", camera=camera)
+    return Script(character="c01", seed=11, shots=[shot])
+
+
+def _faces(start, end):
+    """Keyframe rule: start and end keyframe faces as functions of the prompt."""
+    return {"keyframe": lambda p, s: _face(end(p) if p.startswith("Picture 1") else start(p))}
+
+
+def test_end_keyframe_that_pulls_back_on_a_closer_beat_is_reframed(tmp_path):
+    rules = _faces(lambda p: 200, lambda p: 220 if p.endswith(CAM["closer"]) else 100)
+    r = _run(tmp_path, SizedBackend(rules=rules), _cam_script("closer"), wf=WF5)
+    ends = r.shots[0].end_keyframe_attempts
+    assert [a.framing for a in ends] == ["camera", None] and ends[1].prompt.endswith(CAM["closer"])
+    assert r.shots[0].end_keyframe_key == ends[1].key and r.shots[0].status == "pass"
+
+
+@pytest.mark.parametrize(
+    "camera,end_px,framing",
+    [
+        ("closer", 180, None),
+        ("closer", 160, "camera"),
+        ("wider", 230, None),
+        ("wider", 240, "camera"),
+        ("steady", 180, None),
+        ("steady", 240, "camera"),
+    ],
+)
+def test_camera_check_flags_reversals_beyond_tolerance(tmp_path, camera, end_px, framing):
+    r = _run(tmp_path, SizedBackend(rules=_faces(lambda p: 200, lambda p: end_px)), _cam_script(camera), wf=WF5)
+    assert r.shots[0].end_keyframe_attempts[0].framing == framing
+
+
+def test_reframed_start_prompts_the_end_relative_to_it(tmp_path):
+    # @4 s1: the start is re-framed 80 -> 240 px, so the script's "waist-up" end is now wider than the start.
+    start = lambda p: 240 if p.endswith(SMALL_KF) else 80  # noqa: E731
+    rules = _faces(start, lambda p: 260 if p.endswith(CAM["closer"]) else 110)
+    r = _run(tmp_path, SizedBackend(rules=rules), _cam_script("closer"), wf=WF5)
+    assert r.shots[0].keyframe_attempts[-1].prompt.endswith(SMALL_KF)
+    ends = r.shots[0].end_keyframe_attempts
+    assert len(ends) == 1 and ends[0].prompt.endswith(CAM["closer"]) and ends[0].framing is None
+
+
+def test_camera_suffix_is_not_appended_twice(tmp_path):
+    start = lambda p: 240 if p.endswith(SMALL_KF) else 80  # noqa: E731
+    r = _run(tmp_path, SizedBackend(rules=_faces(start, lambda p: 110)), _cam_script("closer"), wf=WF5)
+    ends = r.shots[0].end_keyframe_attempts
+    assert len(ends) == WF5.steps["end_keyframe"].retry.max_attempts  # re-rolled, never re-prompted again
+    assert all(a.prompt.count(CAM["closer"]) == 1 and a.framing == "camera" for a in ends)
+
+
+def test_shots_without_camera_and_workflows_without_the_check_skip_it(tmp_path):
+    rules = _faces(lambda p: 200, lambda p: 100)
+    r = _run(tmp_path / "a", SizedBackend(rules=rules), _cam_script(None), wf=WF5)
+    assert len(r.shots[0].end_keyframe_attempts) == 1
+    r = _run(tmp_path / "b", SizedBackend(rules=rules), _cam_script("closer"), wf=WF4)
+    assert len(r.shots[0].end_keyframe_attempts) == 1
+
+
+def test_flf_v5_reuses_v4_when_the_framing_already_agrees(tmp_path):
+    rules = _faces(lambda p: 150, lambda p: 150)
+    _run(tmp_path, SizedBackend(rules=rules), _cam_script("steady"), wf=WF4)
+    b = SizedBackend(rules=rules)
+    r = _run(tmp_path, b, _cam_script("steady"), wf=WF5)
+    assert b.calls["keyframe"] == 0 and b.calls["clip"] == 0
+    assert all(a.cache == "hit" for s in r.shots for a in s.end_keyframe_attempts + s.clip_attempts)

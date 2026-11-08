@@ -1,7 +1,8 @@
 # A 3-shot, 15-second script for golden character c01. Motion prompts keep the face toward camera,
 # the lesson from the first single-shot run (a turn to the window made 76% of frames unscorable).
 # `end` is where each shot finishes; only first-last-frame workflows (keyframe_flf) use it, and adding it
-# doesn't change any other workflow's cache keys.
+# doesn't change any other workflow's cache keys. `camera` is how the framing moves from start to end; only
+# workflows with a camera check (keyframe_flf@5) read it.
 character: c01
 seed: 11
 shots:
@@ -15,6 +16,7 @@ shots:
     end: >-
       The person has walked several steps closer and now fills a medium shot from the waist up, mid-stride,
       looking ahead with a calm expression, face clearly visible.
+    camera: closer
   - id: s2
     keyframe: >-
       The same person from the reference image ordering at a café counter, warm interior light, medium
@@ -25,6 +27,7 @@ shots:
     end: >-
       The person is smiling warmly just after a nod, head slightly tilted, still facing the camera at the
       counter.
+    camera: steady
   - id: s3
     keyframe: >-
       The same person from the reference image sitting by a café window holding a cup with both hands at
@@ -36,3 +39,4 @@ shots:
     end: >-
       The person has looked up from the cup and smiles softly at the camera, cup still held at chest height,
       framed slightly closer.
+    camera: closer
