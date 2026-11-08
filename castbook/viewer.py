@@ -258,6 +258,54 @@ def _step_rows(record: dict, models: dict[str, str]) -> tuple[str, float]:
     return "".join(rows), total
 
 
+_CHART_JS = """
+const svg = document.querySelector("svg.chart"), tip = document.getElementById("tip");
+const video = document.getElementById("clip"), hit = document.getElementById("hit");
+const cross = document.getElementById("crosshair"), play = document.getElementById("playhead");
+const span = D.W - D.PAD_L - D.PAD_R;
+const xOf = f => D.PAD_L + span * f / Math.max(D.n_frames - 1, 1);
+function toFrame(evt) {
+  const pt = svg.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  return Math.max(0, Math.min(D.n_frames - 1, (p.x - D.PAD_L) / span * (D.n_frames - 1)));
+}
+function nearest(f) {
+  return D.per_frame.reduce((a, b) => Math.abs(b.frame - f) < Math.abs(a.frame - f) ? b : a);
+}
+hit.addEventListener("mousemove", e => {
+  const p = nearest(toFrame(e)), x = xOf(p.frame);
+  cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
+  tip.innerHTML = `<b>frame ${p.frame}</b> · ${(p.frame / D.fps).toFixed(2)} s<br>` +
+    (p.sim === null ? "no face detected" : `similarity ${p.sim.toFixed(3)}`) +
+    (p.yaw == null ? "" : `<br>yaw ${p.yaw.toFixed(0)}°${p.profile ? " · profile" : ""}`) +
+    (p.hand_overlap == null ? "" : `<br>hand covers ${(p.hand_overlap * 100).toFixed(0)}% of face${p.occluded ? " · occluded" : ""}`) +
+    (p.status && p.status !== "scored" && p.status !== "no_face" ? "<br><i>not scored</i>" : "");
+  const box = svg.getBoundingClientRect(), wrap = svg.parentElement.getBoundingClientRect();
+  const px = (x / D.W) * box.width;
+  tip.style.display = "block";
+  tip.style.left = Math.min(px + 12, box.width - tip.offsetWidth) + "px";
+  tip.style.top = (e.clientY - wrap.top - 40) + "px";
+});
+hit.addEventListener("mouseleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
+hit.addEventListener("click", e => { video.pause(); video.currentTime = nearest(toFrame(e)).frame / D.fps; });
+function tick() {
+  const x = xOf(Math.min(D.n_frames - 1, video.currentTime * D.fps));
+  play.setAttribute("x1", x); play.setAttribute("x2", x);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+"""
+
+
+def chart_script(per_frame: list[dict], n_frames: int, fps: float) -> str:
+    """The <script> that syncs an identity_chart_svg with the page's <video id="clip">: hover for values,
+    click to seek, and a playhead that follows playback. Expects one chart, one #tip and one #clip per page."""
+    data = json.dumps(
+        {"fps": fps, "n_frames": n_frames, "per_frame": per_frame, "W": W, "PAD_L": PAD_L, "PAD_R": PAD_R}
+    )
+    return f"<script>\nconst D = {data};{_CHART_JS}</script>"
+
+
 def _data_uri(path: Path, mime: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
@@ -301,10 +349,6 @@ def render_run(run_dir: Path) -> Path:
         if pose_aware
         else "This run predates the pose-aware judge: turned-away frames score low even when the identity is right."
     )
-    data = json.dumps(
-        {"fps": fps, "n_frames": n_frames, "per_frame": per_frame, "W": W, "PAD_L": PAD_L, "PAD_R": PAD_R}
-    )
-
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Castbook run {record["run_id"]}</title><style>{CSS}</style></head>
@@ -354,44 +398,7 @@ def render_run(run_dir: Path) -> Path:
   <tfoot><tr><td colspan="6">Total (attributable GPU time)</td><td class="num">${total:.3f}</td></tr></tfoot></table>
 </div>
 </main>
-<script>
-const D = {data};
-const svg = document.querySelector("svg.chart"), tip = document.getElementById("tip");
-const video = document.getElementById("clip"), hit = document.getElementById("hit");
-const cross = document.getElementById("crosshair"), play = document.getElementById("playhead");
-const span = D.W - D.PAD_L - D.PAD_R;
-const xOf = f => D.PAD_L + span * f / Math.max(D.n_frames - 1, 1);
-function toFrame(evt) {{
-  const pt = svg.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
-  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
-  return Math.max(0, Math.min(D.n_frames - 1, (p.x - D.PAD_L) / span * (D.n_frames - 1)));
-}}
-function nearest(f) {{
-  return D.per_frame.reduce((a, b) => Math.abs(b.frame - f) < Math.abs(a.frame - f) ? b : a);
-}}
-hit.addEventListener("mousemove", e => {{
-  const p = nearest(toFrame(e)), x = xOf(p.frame);
-  cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
-  tip.innerHTML = `<b>frame ${{p.frame}}</b> · ${{(p.frame / D.fps).toFixed(2)}} s<br>` +
-    (p.sim === null ? "no face detected" : `similarity ${{p.sim.toFixed(3)}}`) +
-    (p.yaw == null ? "" : `<br>yaw ${{p.yaw.toFixed(0)}}°${{p.profile ? " · profile" : ""}}`) +
-    (p.hand_overlap == null ? "" : `<br>hand covers ${{(p.hand_overlap * 100).toFixed(0)}}% of face${{p.occluded ? " · occluded" : ""}}`) +
-    (p.status && p.status !== "scored" && p.status !== "no_face" ? "<br><i>not scored</i>" : "");
-  const box = svg.getBoundingClientRect(), wrap = svg.parentElement.getBoundingClientRect();
-  const px = (x / D.W) * box.width;
-  tip.style.display = "block";
-  tip.style.left = Math.min(px + 12, box.width - tip.offsetWidth) + "px";
-  tip.style.top = (e.clientY - wrap.top - 40) + "px";
-}});
-hit.addEventListener("mouseleave", () => {{ tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); }});
-hit.addEventListener("click", e => {{ video.pause(); video.currentTime = nearest(toFrame(e)).frame / D.fps; }});
-function tick() {{
-  const x = xOf(Math.min(D.n_frames - 1, video.currentTime * D.fps));
-  play.setAttribute("x1", x); play.setAttribute("x2", x);
-  requestAnimationFrame(tick);
-}}
-requestAnimationFrame(tick);
-</script>
+{chart_script(per_frame, n_frames, fps)}
 </body></html>
 """
     out = run_dir / "index.html"

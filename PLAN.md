@@ -9,9 +9,29 @@ Background research: [reports/Mage platform deep dive.md](reports/Mage%20platfor
 
 Why it lands with Mage specifically:
 - **Mage's own docs admit the problem.** Story Studio says consistency "is less reliable over long sequences". On 5 of their video models you can't use a Character *and* first/last frames in the same generation.
-- **No competitor documents output-quality checks or retry-on-drift.** Kling, Runway, Krea, Higgsfield and OpenArt all compete on more canvas and agent features instead.
+- **Quality checks are now LLM critics; nobody publishes a measured identity score.** Mage's Sidekick (Oct 31) checks each deliverable with an LLM critic (a score out of 10, and on Max "a critic and up to 2 fix rounds"). Kling, Runway, Krea, Higgsfield and OpenArt compete on canvas and agent features. Castbook is the measurement layer under a critic like Sidekick's: a per-frame identity number at CPU cost that says when it *can't* tell, and that can measure how often the critic is right.
 - **Unlimited plans plus refunds on failed generations** mean every unusable output is GPU spend Mage doesn't get paid for. "$ per accepted second" is a margin metric they'll care about.
 - **It copies their API shape:** async `request_id` / `status_url` / `cancel_url`, idempotency keys, a `billing` block. Greg (CTO, likely the interviewer) will recognise his own design.
+
+## Checked again (2026-11-08)
+
+What shipped since the first pass, and what it changes:
+
+1. **Sidekick (Oct 31) is Mage's new creative agent and it checks its own work.** Each deliverable gets a QA report with
+   an LLM critic score out of 10. Check levels run from Quick (no checks) to Max ("checks every stage, a critic and up
+   to 2 fix rounds"). The default LLM is DeepSeek V4.1 Flash, with Claude, GPT and Grok models selectable. → The gap
+   is no longer "nobody checks"; it's that an LLM critic is unmeasured. Castbook's gate can be its ground truth, and
+   runs on CPU instead of LLM tokens.
+2. **The docs now say the problem in one line.** First and Last Frames: "Frame control is not character
+   consistency." That is what `keyframe_flf@4`'s shot 1 measures: both ends pinned, the face still drifts in between.
+3. **Mage's self-hosted Wan 2.2 takes no Characters and no last frame** (API: `first_image` only, no `@handle`
+   mentions, 40 Gems at default settings). Castbook runs the same open weights with identity baked into keyframes
+   plus first/last-frame mode, and measures that the face holds: character video on the cheapest self-hosted video
+   model.
+4. **More vendor-routed video:** Seedance 2.5 / 2.0, Wan 3.0, Pika H3 Flex, plus Magejutsu (video recast). Wan 3.0
+   joins the frames-*or*-Characters list (Berry, Lemon, Melon, MiniMax-H3, Plum).
+5. **API limits:** 20 generations in flight per account (web and API together), still no webhooks, idempotency keys
+   replay refusals too, `content_blocked` errors carry a `reason` and `stage`.
 
 ## Checked in the live product (Peter's account, 2026-10-29)
 
@@ -54,7 +74,7 @@ I clicked through mage.space while signed in: Characters, Models, Agent, API/MCP
 
 I asked Mage Agent (on its free "Low" setting) to plan a 30 s, 6-shot single-character video *without generating anything*. I asked the Guide assistant about model limits, queues and the API. No Gems were spent. These answers are the strongest evidence for the project.
 
-**1. Mage's own Agent says the gap exists.** Asked whether it detects face drift, it replied: *"There is no built-in face-similarity score and no auto-re-roll loop… nothing in the pipeline compares the rendered shot back to the portrait numerically."* Its QC is a visual checklist the LLM reads off the renders, and it admits that misses mid-clip morphing. It then **recommended exporting frames and running ArcFace/InsightFace outside Mage, calibrating the threshold against your own good shots.** That is Castbook's identity gate, described by their own product. Quote this in the interview.
+**1. Mage's own Agent said the gap existed (Oct 29, before Sidekick shipped its critic).** Asked whether it detects face drift, it replied: *"There is no built-in face-similarity score and no auto-re-roll loop… nothing in the pipeline compares the rendered shot back to the portrait numerically."* Its QC is a visual checklist the LLM reads off the renders, and it admits that misses mid-clip morphing. It then **recommended exporting frames and running ArcFace/InsightFace outside Mage, calibrating the threshold against your own good shots.** That is Castbook's identity gate, described by their own product. Quote this in the interview.
 
 **2. The Agent's recipe is Castbook's DAG.**
 
@@ -302,4 +322,5 @@ Questions for Greg:
 - Is the GPU fleet all on Modal, or split across providers?
 - How do you cache weights and LoRAs across the long-tail catalog?
 - How is moderation staged?
-- Do you score identity internally today?
+- What does Sidekick's critic check, and how do you know when it's right? Would a measured identity score help it?
+- Why DeepSeek V4.1 Flash as Sidekick's default model: cost, latency or quality?
