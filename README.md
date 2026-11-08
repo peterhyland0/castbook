@@ -8,6 +8,8 @@ the character's face with ArcFace, re-rolls the shots that drift, and records th
 Workflows are versioned configs, so two recipes can run on the same script and be compared on identity, retries
 and **dollars per accepted second of video**.
 
+**[Demo page: the videos, scores and costs side by side →](https://peterhyland0.github.io/castbook/)**
+
 ![The same 3-shot script through three workflows](docs/media/three-ways.gif)
 
 *Same character, same script, three ways to chain it. Left: a keyframe per shot, then image-to-video. Middle:
@@ -23,7 +25,8 @@ start and end keyframes, then first/last-frame video. Right: each clip starts fr
 | **Cost** | A warm 5 s Wan 2.2 clip is $0.025 (22 s on an H100). Most of a small run's bill is cold-loading the models, which is the next thing to fix. |
 
 One character and one seed per arm so far, so treat these as directions, not results. Every experiment, with its
-run and numbers, is in the [results log](docs/log.md). Build the demo page with `uv run python -m castbook.site`.
+run and numbers, is in the [results log](docs/log.md). The [demo page](https://peterhyland0.github.io/castbook/) is
+built from the run records by `uv run python -m castbook.site` and published from the `gh-pages` branch.
 
 ## How it works
 
