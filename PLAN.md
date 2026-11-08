@@ -3,15 +3,15 @@
 A side project for the Mage (mage.space) Senior AI Infrastructure Engineer role.
 Background research: [reports/Mage platform deep dive.md](reports/Mage%20platform%20deep%20dive.md)
 
-## The pitch (what you say to Roi / Greg)
+## Why this project
 
-> "You told me Characters across models plus chained workflows is what took off, and you already ship that as Story Studio, Short Drama and the Character Sheet app. The hard part underneath is *knowing* a chain kept the character, and knowing which chain is best for the money. So I built that platform layer as a pipeline service on Modal + FastAPI. It takes a character and a script, runs a versioned multi-model workflow (keyframes → video → stitch), scores every shot for identity drift, and re-rolls shots that drift. Then it A/B tests workflow variants against each other on identity, cost and latency. Here are the side-by-side videos and the scoreboard."
+Characters that carry across models, chained into multi-step workflows, are what Mage's product is built around (Story Studio, Short Drama, the Character Sheet app, Sidekick). The hard part underneath is *knowing* a chain kept the character, and knowing which chain is best for the money. Castbook is that platform layer as a pipeline service on Modal + FastAPI: it takes a character and a script, runs a versioned multi-model workflow (keyframes → video → stitch), scores every shot for identity drift, re-rolls shots that drift, and A/B tests workflow variants on identity, cost and latency.
 
-Why it lands with Mage specifically:
+Why it fits Mage specifically:
 - **Mage's own docs admit the problem.** Story Studio says consistency "is less reliable over long sequences". On 5 of their video models you can't use a Character *and* first/last frames in the same generation.
 - **Quality checks are now LLM critics; nobody publishes a measured identity score.** Mage's Sidekick (Oct 31) checks each deliverable with an LLM critic (a score out of 10, and on Max "a critic and up to 2 fix rounds"). Kling, Runway, Krea, Higgsfield and OpenArt compete on canvas and agent features. Castbook is the measurement layer under a critic like Sidekick's: a per-frame identity number at CPU cost that says when it *can't* tell, and that can measure how often the critic is right.
 - **Unlimited plans plus refunds on failed generations** mean every unusable output is GPU spend Mage doesn't get paid for. "$ per accepted second" is a margin metric they'll care about.
-- **It copies their API shape:** async `request_id` / `status_url` / `cancel_url`, idempotency keys, a `billing` block. Greg (CTO, likely the interviewer) will recognise his own design.
+- **It copies their API shape:** async `request_id` / `status_url` / `cancel_url`, idempotency keys, a `billing` block.
 
 ## Checked again (2026-11-08)
 
@@ -63,7 +63,7 @@ I clicked through mage.space while signed in: Characters, Models, Agent, API/MCP
    | Z-Image Turbo | 10 | 3 s | |
    | SDXL community models | 10 | 2–8 s | |
 
-   At ~10k Gems per $10 (from the research; verify), Wan 2.2 Fast sells for about **$0.045 a clip in 23 s**. → **Benchmark Castbook's own Wan 2.2 cost and latency against that number.** If yours is higher, say what Mage must be doing (resolution and frame caps, 4-step distillation, batching, GPU choice). That's a strong interview conversation.
+   At ~10k Gems per $10 (from the research; verify), Wan 2.2 Fast sells for about **$0.045 a clip in 23 s**. → **Benchmark Castbook's own Wan 2.2 cost and latency against that number.** If yours is higher, say what Mage must be doing (resolution and frame caps, 4-step distillation, batching, GPU choice). That comparison is worth writing up.
 5. **The API and MCP need a payment.** Your account is free tier with 78 Gems. "Keys and connected apps work once your account has a successful payment"; signup Gems are app-only. → Using Mage's API as an arm means buying the smallest Gem pack. That's your call; otherwise use fal for the vendor arm.
 6. **Small details worth mirroring:**
    - **"Save Formula"** (saved generation presets) and **Autocreate** (up to 100 variations) in Advanced are the user-facing version of versioned workflows and A/B arms.
@@ -74,7 +74,7 @@ I clicked through mage.space while signed in: Characters, Models, Agent, API/MCP
 
 I asked Mage Agent (on its free "Low" setting) to plan a 30 s, 6-shot single-character video *without generating anything*. I asked the Guide assistant about model limits, queues and the API. No Gems were spent. These answers are the strongest evidence for the project.
 
-**1. Mage's own Agent said the gap existed (Oct 29, before Sidekick shipped its critic).** Asked whether it detects face drift, it replied: *"There is no built-in face-similarity score and no auto-re-roll loop… nothing in the pipeline compares the rendered shot back to the portrait numerically."* Its QC is a visual checklist the LLM reads off the renders, and it admits that misses mid-clip morphing. It then **recommended exporting frames and running ArcFace/InsightFace outside Mage, calibrating the threshold against your own good shots.** That is Castbook's identity gate, described by their own product. Quote this in the interview.
+**1. Mage's own Agent said the gap existed (Oct 29, before Sidekick shipped its critic).** Asked whether it detects face drift, it replied: *"There is no built-in face-similarity score and no auto-re-roll loop… nothing in the pipeline compares the rendered shot back to the portrait numerically."* Its QC is a visual checklist the LLM reads off the renders, and it admits that misses mid-clip morphing. It then **recommended exporting frames and running ArcFace/InsightFace outside Mage, calibrating the threshold against your own good shots.** That is Castbook's identity gate, described by their own product.
 
 **2. The Agent's recipe is Castbook's DAG.**
 
@@ -121,7 +121,7 @@ I asked Mage Agent (on its free "Low" setting) to plan a 30 s, 6-shot single-cha
 - The Guide has no published wait times or queue numbers.
 - → In Castbook's two-lane queue, the slow lane is per-user concurrency 1 on cheap capacity; the fast lane is per-user concurrency N on premium GPUs. Measure the fairness/latency trade-off.
 
-**6. API.** The Guide had no information on webhooks or rate limits, and says app-side bots are banned ("automation is meant to go through the API"). Ask Greg whether webhooks are planned. Castbook should offer both polling and an optional webhook.
+**6. API.** The Guide had no information on webhooks or rate limits, and says app-side bots are banned ("automation is meant to go through the API"). Whether webhooks are planned is an open question. Castbook should offer both polling and an optional webhook.
 
 **7. The Guide is itself a tool-using agent.** It runs "Found relevant Mage docs", "Checked model info" and "Checked membership info". Their docs and model metadata are queryable by tools, so the same model-capability data could drive routing.
 
@@ -310,13 +310,13 @@ M0–M2 is about 1.5 weeks of evenings. M3 is what makes it a story. Prioritise 
 - **ArcFace on stylised or anime characters is unreliable.** Keep the golden set photoreal or semi-real, and report DINOv2 alongside.
 - **Cold-start and weight-loading time on 14B video models** will eat iteration time. Use snapshots early, and keep a `min_containers=0` default for cost.
 
-## Talking points + questions for the interview
+## Ideas and open questions
 
-Talking points:
+The ideas the project is built around:
 - Identity as a number. Workflows as versioned, comparable artifacts. Models onboarded through a tested adapter instead of a one-off integration.
 - $/accepted-second as the metric that joins quality and margin under unlimited plans.
 
-Questions for Greg:
+Open questions about how Mage's platform works:
 - The changelog says partners run Cherry and Melon. How much of the video traffic goes to partner APIs vs your own GPUs, and how do you route and fail over between them?
 - Is Fast Mode's "multiple premium GPUs" sequence parallelism (xDiT-style), or just a dedicated pool? How is the slow Unlimited lane scheduled?
 - Is the GPU fleet all on Modal, or split across providers?
