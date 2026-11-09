@@ -38,13 +38,14 @@ built from the run records by `uv run python -m castbook.site` and published fro
   workflow versions only compute what changed, and A/B arms share upstream work.
 - **On Modal:** one GPU class per model family with weights on a Volume; a CPU orchestrator; a FastAPI layer with
   async runs (`request_id` / `status_url` / `cancel_url`), idempotency keys, a pre-run cost estimate and a billing
-  block. 106 unit tests run in CI without a GPU.
+  block. 120+ unit tests run in CI without a GPU.
 
 ## Status
 
 - **Done:** single shot end to end; pose-, occlusion- and size-aware judge; multi-shot DAG with gate-driven
   re-rolls; versioned workflows; A/B scoreboard across three chain types; framing and camera checks
-  (`keyframe_flf@5`); FastAPI layer (tested locally, not deployed).
+  (`keyframe_flf@5`; `@6` rewrites the end prompt for re-framed shots, not run yet); FastAPI layer (tested
+  locally, not deployed).
 - **Next:** a 6-shot, 30 s run from one API call; the retry ladder as config (same → degrade → alternate model →
   fallback shot); threshold calibration on hand-labeled frames; bf16 weights and memory snapshots for cold
   starts; more arms (full-step Wan, hosted video APIs).
