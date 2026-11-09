@@ -126,7 +126,8 @@ button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid
     <div class="sub">warm H100 time, every attempt counted</div></div>
   <div class="stat"><div class="label">One 5 s Wan 2.2 clip, warm</div>
     <div class="value">$0.025</div>
-    <div class="sub">22 s inference · 832×480 · 4-step</div></div>
+    <div class="sub">22 s inference · 832×480
+    · 4-step</div></div>
   <div class="stat"><div class="label">Fixing a too-small face</div>
     <div class="value">~$0.003</div>
     <div class="sub">one re-framed keyframe, vs 3.6× clip cost at 720p</div></div>
@@ -135,8 +136,8 @@ button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid
 <div class="card">
   <h2>Same script, same character, three ways to chain it</h2>
   <p class="lede">A 3-shot script (a street at dawn, a café counter, a café window) through three workflow
-  versions. Each shot's clip must pass the identity gate: p10 similarity ≥ 0.5 over the frames that can be
-  scored.</p>
+  versions. Each shot's clip must pass the identity gate: p10 similarity ≥ 0.5 over
+  the frames that can be scored.</p>
   <div class="trio"><figure><video src="media/keyframe_i2v-2.mp4" muted playsinline loop controls autoplay preload="auto"></video><figcaption><b>Keyframe → video (an agent&#x27;s usual recipe)</b><br><code>keyframe_i2v@2</code> · 2/3 shots passed the identity gate</figcaption></figure><figure><video src="media/keyframe_flf-1.mp4" muted playsinline loop controls autoplay preload="auto"></video><figcaption><b>Start + end keyframes → first/last-frame video</b><br><code>keyframe_flf@1</code> · 2/3 shots passed the identity gate</figcaption></figure><figure><video src="media/lastframe_chain-1.mp4" muted playsinline loop controls autoplay preload="auto"></video><figcaption><b>Chain each clip off the last frame</b><br><code>lastframe_chain@1</code> · 0/3 shots passed the identity gate</figcaption></figure></div>
   <p class="hint"><button id="play">Play all three from the start</button></p>
   <div class="scroll"><table><thead><tr><th>Workflow</th><th class="num">Accepted</th><th class="num">First try</th><th class="num">Min p10</th><th class="num">Attempts</th><th class="num">Warm $</th><th class="num">$ / accepted s</th></tr></thead><tbody><tr><td><code>keyframe_i2v@2</code></td><td class="num win">2/3</td><td class="num">1/3</td><td class="num">0.50</td><td class="num">10</td><td class="num">$0.129</td><td class="num">$0.0127</td></tr><tr><td><code>keyframe_flf@1</code></td><td class="num win">2/3</td><td class="num win">2/3</td><td class="num win">0.52</td><td class="num">12</td><td class="num win">$0.117</td><td class="num win">$0.0116</td></tr><tr><td><code>lastframe_chain@1</code></td><td class="num">0/3</td><td class="num">0/3</td><td class="num">–</td><td class="num">9</td><td class="num">$0.142</td><td class="num">–</td></tr></tbody></table></div>
@@ -170,9 +171,10 @@ button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid
 
 <div class="card">
   <h2>Fix it at the cheap step</h2>
-  <p class="lede">Shot 1's face was 79 px wide in the keyframe, about 53 px in the 480p clip, so every frame was
-  unverifiable. Rendering clips at 720p made it measurable, but at 3.6× the clip cost. The framing check predicts
-  the clip's face size from the keyframe and re-frames <i>the keyframe</i> instead, for about $0.003.</p>
+  <p class="lede">Shot 1's face was 79 px wide in the keyframe, about
+  53 px in the 480p clip, so every frame was unverifiable. Rendering clips at
+  720p made it measurable, but at 3.6× the clip cost. The framing check predicts the clip's
+  face size from the keyframe and re-frames <i>the keyframe</i> instead, for about $0.003.</p>
   <div class="pair">
     <figure><img src="media/s1-before.jpg" alt="Wide keyframe, small face"><figcaption>Before: face
       79 px, keyframe identity 0.52</figcaption></figure>
@@ -182,8 +184,9 @@ button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid
   <div class="scroll"><table><thead><tr><th>Workflow</th><th class="num">Accepted</th><th class="num">Warm $</th><th class="num">$ / accepted s</th></tr></thead><tbody><tr><td><code>keyframe_flf@2</code></td><td class="num">2/3</td><td class="num win">$0.120</td><td class="num win">$0.0118</td></tr><tr><td><code>keyframe_flf@3</code></td><td class="num">2/3</td><td class="num">$0.345</td><td class="num">$0.0341</td></tr><tr><td><code>keyframe_flf@4</code></td><td class="num">2/3</td><td class="num">$0.122</td><td class="num">$0.0121</td></tr></tbody></table></div>
   <p class="take">Shot 1 in each: <code>@2</code> unverifiable (0% scorable),
   <code>@3</code> fail at p10 0.44,
-  <code>@4</code> fail at p10 0.48, the same answer as 720p for a
-  third of the cost. The answer is honest: once the face is big enough to measure, this shot <i>does</i> drift,
+  <code>@4</code> fail at p10 0.48, the same answer as 720p
+  with a 480p clip (3.6× cheaper).
+  The answer is honest: once the face is big enough to measure, this shot <i>does</i> drift,
   so lowering the threshold would have shipped a bad clip.
   <a href="deep/scoreboard-framing.html">Full scoreboard →</a></p>
 </div>
@@ -201,7 +204,7 @@ button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid
         <li><b>Every step is content-addressed</b>: <code>sha256(step, model@rev, params, inputs, seed)</code>.
           A re-run or a new workflow version only computes what changed, so A/B arms share upstream work.</li>
         <li><b>On Modal</b>: one GPU class per model family, weights on a Volume, a CPU orchestrator and a FastAPI
-          layer that scale on their own. 106 unit tests run in CI without a GPU.</li>
+          layer that scale on their own. The unit tests run in CI without a GPU.</li>
       </ol>
     </div>
     <div>
@@ -236,9 +239,9 @@ Idempotency-Key: cafe-morning-c01-1
     <td class="num">22.4 s</td><td class="num">$0.274</td>
     <td class="num">$0.025</td></tr>
   </tbody></table></div>
-  <p class="take">Warm inference is already cheap and fast; <b>the cost is the cold start</b>. Wan's weights take
-  over three minutes to load and cast, so most of a small run's bill is model loading. Re-saved bf16 weights plus
-  Modal memory snapshots are the next step.</p>
+  <p class="take">Warm inference is already cheap and fast; <b>the cost is the cold start</b>. Wan's weights took
+  227 s to load and cast in this run, so most of a small run's bill is model loading.
+  Re-saved bf16 weights plus Modal memory snapshots are the next step.</p>
 </div>
 
 <div class="card" id="next">
@@ -255,7 +258,7 @@ Idempotency-Key: cafe-morning-c01-1
 </div>
 
 <footer>Built by Peter Hyland. All characters are generated; no real people. Numbers come from runs on
-Oct 29–Nov 3, 2026 (one character, one seed per arm) and are regenerated from the run records by
+Oct 30 – Nov 3, 2026 UTC (one character, one seed per arm) and are regenerated from the run records by
 <code>castbook/site.py</code>. <a href="https://github.com/peterhyland0/castbook">github.com/peterhyland0/castbook</a></footer>
 </main>
 <script>
