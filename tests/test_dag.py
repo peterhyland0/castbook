@@ -435,6 +435,48 @@ def test_camera_suffix_is_not_appended_twice(tmp_path):
     assert all(a.prompt.count(CAM["closer"]) == 1 and a.framing == "camera" for a in ends)
 
 
+def test_end_keyframe_that_never_matches_the_camera_degrades_the_shot(tmp_path):
+    r = _run(tmp_path, SizedBackend(rules=_faces(lambda p: 200, lambda p: 100)), _cam_script("closer"), wf=WF5)
+    shot = r.shots[0]
+    assert all(a.framing == "camera" and a.verdict["status"] == "pass" for a in shot.end_keyframe_attempts)
+    assert shot.clip_attempts[-1].verdict["status"] == "pass" and shot.status == "degraded"
+
+
+def test_attempts_record_which_reprompt_shaped_them(tmp_path):
+    start = lambda p: 240 if p.endswith(SMALL_KF) else 80  # noqa: E731
+    r = _run(tmp_path, SizedBackend(rules=_faces(start, lambda p: 260)), _cam_script("closer"), wf=WF5)
+    kfs = r.shots[0].keyframe_attempts
+    assert [a.reprompts for a in kfs] == [[], ["small"]]
+    assert r.shots[0].to_dict()["keyframe_attempts"][1]["reprompts"] == ["small"]
+
+
+WF6 = load_workflow("keyframe_flf@6")
+
+
+def test_v6_rewrites_the_end_prompt_for_a_reframed_start(tmp_path):
+    start = lambda p: 240 if p.endswith(SMALL_KF) else 80  # noqa: E731
+    r = _run(tmp_path, SizedBackend(rules=_faces(start, lambda p: 260)), _cam_script("closer"), wf=WF6)
+    prompt = r.shots[0].end_keyframe_attempts[0].prompt
+    tmpl = WF6.framing.camera.reframed_template
+    assert prompt == tmpl.format(end="end 0", camera=WF6.framing.camera.suffix["closer"])
+    assert "ignore any shot size" in prompt and r.shots[0].status == "pass"
+
+
+def test_v6_reuses_v5_when_the_start_was_not_reframed(tmp_path):
+    rules = _faces(lambda p: 150, lambda p: 150)
+    _run(tmp_path, SizedBackend(rules=rules), _cam_script("closer"), wf=WF5)
+    b = SizedBackend(rules=rules)
+    _run(tmp_path, b, _cam_script("closer"), wf=WF6)
+    assert b.calls["keyframe"] == 0 and b.calls["clip"] == 0
+
+
+def test_reframed_template_must_have_both_slots():
+    from castbook.workflow import CameraCheck
+
+    with pytest.raises(ValueError, match="reframed_template"):
+        CameraCheck(reframed_template="Picture 1 later: {end}")
+
+
 def test_shots_without_camera_and_workflows_without_the_check_skip_it(tmp_path):
     rules = _faces(lambda p: 200, lambda p: 100)
     r = _run(tmp_path / "a", SizedBackend(rules=rules), _cam_script(None), wf=WF5)

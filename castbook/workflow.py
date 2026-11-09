@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from castbook.shots import Camera
 
@@ -57,12 +57,22 @@ class CameraCheck(BaseModel):
     reversed beat (the shot pulls back while the script walks toward the camera); it does not enforce how much the
     framing moves. A miss is re-prompted with `suffix[camera]`. When the start keyframe was itself re-framed for a
     small face, the script's absolute shot sizes in `end` no longer describe the start, so the end keyframe gets the
-    relative `suffix[camera]` from its first attempt.
+    relative `suffix[camera]` from its first attempt. Without `reframed_template` (@5) the suffix is appended after
+    the script's text, which can still name an absolute size that contradicts it; with it, the end prompt is
+    `reframed_template` formatted with `{end}` and `{camera}`, so the template can say which instruction wins.
     """
 
     model_config = ConfigDict(extra="forbid")
     tolerance: float = 0.15
     suffix: dict[Camera, str] = {}
+    reframed_template: str | None = None
+
+    @field_validator("reframed_template")
+    @classmethod
+    def _has_slots(cls, v: str | None) -> str | None:
+        if v is not None and not ("{end}" in v and "{camera}" in v):
+            raise ValueError("reframed_template needs {end} and {camera}")
+        return v
 
 
 class Framing(BaseModel):

@@ -78,6 +78,8 @@ class Attempt:
     # set when identity passed but the framing didn't: "small" (the clip's face would be too small to score) or
     # "camera" (the end keyframe's framing contradicts the shot's camera direction)
     framing: str | None = None
+    # causes whose re-prompt suffix is in this attempt's prompt, in order ("small", "camera", "profile", ...)
+    reprompts: list[str] = field(default_factory=list)
 
     @property
     def rank(self) -> tuple[int, bool, float]:
@@ -215,7 +217,7 @@ class Executor:
         policy = cfg.retry or RetryPolicy(max_attempts=1)
         by_cause = {**policy.reprompt_by_cause, **(framing_suffixes or {})}
         attempts: list[Attempt] = []
-        reprompts = 0
+        causes: list[str] = []
         for n in range(policy.max_attempts):
             self._check_cancel()
             seed = shot_seed(base_seed, shot_index, n)
@@ -230,8 +232,9 @@ class Executor:
             timing = timing or art.meta.get("timing")
             result = self.cache.judged(judge_key(self.judge_cfg, key), lambda art=art: judge(art.data))
             face = (result.get("frame") or {}).get("face_px")
+            verdict, score = result["verdict"], result["score"]
             attempt = Attempt(
-                step, n, seed, prompt, key, cache, result["verdict"], result["score"], timing, face_px=face
+                step, n, seed, prompt, key, cache, verdict, score, timing, face_px=face, reprompts=causes[:]
             )
             status = attempt.verdict["status"]
             if status == "pass" and framing is not None:
@@ -241,14 +244,18 @@ class Executor:
             if status == "pass" and attempt.framing is None:
                 break
             if attempt.framing:  # identity is fine, the framing isn't: only a cause-specific suffix helps
-                suffix = by_cause.get(attempt.framing, "")
+                cause = attempt.framing
+                suffix = by_cause.get(cause, "")
             elif status == "unverifiable":
-                suffix = policy.suffix_for(blocking_cause(attempt.score))
+                blocking = blocking_cause(attempt.score)
+                cause = blocking if blocking in policy.reprompt_by_cause else "default"
+                suffix = policy.suffix_for(blocking)
             else:
-                suffix = ""
-            if suffix and suffix not in prompt and reprompts < policy.max_reprompts:
+                cause, suffix = None, ""
+            # a suffix already in the prompt has been tried: later attempts re-roll the seed instead
+            if suffix and suffix not in prompt and len(causes) < policy.max_reprompts:
                 prompt = prompt + suffix
-                reprompts += 1
+                causes.append(cause)
         return attempts
 
     def _run_shot(
@@ -274,6 +281,7 @@ class Executor:
 
         try:
             gated: list[Attempt] = []
+            start_kf: Attempt | None = None  # the chosen start keyframe, when this shot made one
             if first is None:
                 kf_params = self.wf.steps["keyframe"].params
                 result.keyframe_attempts = self._attempts(
@@ -287,8 +295,9 @@ class Executor:
                     "keyframe.png",
                     framing,
                 )
-                gated.append(best(result.keyframe_attempts))
-                result.keyframe_key = gated[-1].key
+                start_kf = best(result.keyframe_attempts)
+                gated.append(start_kf)
+                result.keyframe_key = start_kf.key
                 start = store.get(result.keyframe_key).data
             else:
                 result.keyframe_key, start = first
@@ -298,13 +307,15 @@ class Executor:
                 end_params = self.wf.steps["end_keyframe"].params
                 end_prompt = end_params["prompt_template"].format(end=shot.end)
                 end_check, end_suffixes = framing, None
-                start_kf = best(result.keyframe_attempts) if result.keyframe_attempts else None
                 cam = self.wf.framing.camera if self.wf.framing else None
                 if cam and shot.camera and start_kf and start_kf.face_px:
                     end_check = _camera_check(framing, shot.camera, start_kf.face_px, cam.tolerance)
                     end_suffixes = {"camera": cam.suffix.get(shot.camera, "")}
-                    if self._reframed(start_kf):  # the script's shot sizes describe the old start: go relative
-                        end_prompt += end_suffixes["camera"]
+                    if "small" in start_kf.reprompts:  # the script's shot sizes describe the old start: go relative
+                        if cam.reframed_template:
+                            end_prompt = cam.reframed_template.format(end=shot.end, camera=end_suffixes["camera"])
+                        else:  # @5: appended after the script's absolute shot size, which can contradict it
+                            end_prompt += end_suffixes["camera"]
                 result.end_keyframe_attempts = self._attempts(
                     "end_keyframe",
                     i,
@@ -339,7 +350,7 @@ class Executor:
             )
             gated.append(best(result.clip_attempts))
             result.clip_key = gated[-1].key
-            result.status = "pass" if all(a.verdict["status"] == "pass" for a in gated) else "degraded"
+            result.status = "pass" if all(_accepted(a) for a in gated) else "degraded"
         except Cancelled:
             result.status = "cancelled"
         except Exception as e:  # noqa: BLE001 - one shot's failure is recorded, the run continues
@@ -359,12 +370,6 @@ class Executor:
             return "small" if small else None
 
         return check
-
-    def _reframed(self, keyframe: Attempt) -> bool:
-        """Did this keyframe come from a small-face re-prompt?"""
-        retry = self.wf.steps["keyframe"].retry
-        small = retry.reprompt_by_cause.get("small") if retry else None
-        return bool(small) and small in keyframe.prompt
 
     def _clip_size(self, faces: list[float | None], kf_width: int | None) -> tuple[int, int] | None:
         """Cheapest clip size whose predicted face clears the bar; the largest if none does."""
@@ -465,6 +470,12 @@ def _camera_check(
         return "camera" if reversed_ else None
 
     return check
+
+
+def _accepted(a: Attempt) -> bool:
+    """A gated step counts toward a passing shot when identity passed and the framing doesn't contradict the
+    script. A "small" miss alone doesn't count against it: the clip is rendered larger and judged on its own."""
+    return a.verdict["status"] == "pass" and a.framing != "camera"
 
 
 def _brief(a: Attempt) -> dict:

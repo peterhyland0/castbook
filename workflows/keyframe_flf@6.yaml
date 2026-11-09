@@ -1,0 +1,79 @@
+# keyframe_flf@5 with the re-framed end prompt rewritten instead of appended to. In @5, when s1's start was
+# re-framed to a close-up, the relative camera suffix went after the script's "fills a medium shot from the waist
+# up", so the end prompt asked for two framings at once; a camera miss then had nothing left to re-prompt with.
+# Here a re-framed start gets `camera.reframed_template`, which states that the camera instruction wins. Only
+# re-framed shots change, so every other step is a cache hit on @5. Not run on GPU yet.
+id: keyframe_flf
+version: 6
+mode: keyframe_flf
+steps:
+  keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+    retry:
+      max_attempts: 5          # keyframes are cheap (~$0.003), and framing retries come out of the same budget
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+      reprompt_by_cause:
+        small: " Framed closer: head and shoulders fill the frame, the face large and sharp."
+  end_keyframe:
+    model: qwen-image-edit-2511
+    params:
+      lightning: true
+      width: 1248
+      height: 720
+      # refs are [start keyframe, portrait]; Qwen-Image-Edit-Plus numbers them Picture 1 and Picture 2
+      prompt_template: >-
+        Picture 1 a few seconds later: {end} Keep the same location, camera angle, lighting and outfit as
+        Picture 1, and the same face as Picture 2. Cinematic 16:9 still.
+    retry:
+      max_attempts: 5          # keyframes are cheap (~$0.003), and framing retries come out of the same budget
+      max_reprompts: 1
+      reprompt_suffix: " The face is fully visible and turned toward the camera, no hands near the face."
+      reprompt_by_cause:
+        small: " Framed closer: head and shoulders fill the frame, the face large and sharp."
+  clip:
+    model: wan2.2-i2v-a14b
+    params:
+      lightning: true
+      width: 832
+      height: 480
+      num_frames: 81
+      fps: 16
+    retry:
+      max_attempts: 2          # clips cost ~4x a keyframe, so fewer tries
+      max_reprompts: 1
+      reprompt_suffix: " Keep the face turned toward the camera throughout; hands stay away from the face."
+      reprompt_by_cause:
+        small: " The camera pushes in close; head and shoulders fill the frame and the face stays large and sharp."
+  judge:
+    sample_every: 4
+    max_yaw: 45
+    max_hand_overlap: 0.15
+    min_face_px: 64            # narrower faces are unverifiable, not fail (provisional until M3 calibration)
+    gate:
+      metric: p10
+      min_score: 0.5
+      min_coverage: 0.5
+  stitch:
+    params:
+      fps: 16
+framing:
+  min_clip_face_px: 64
+  clip_sizes:                  # cheapest first: 720p clips cost ~3.6x (71 s vs 20 s warm on H100)
+    - [832, 480]
+    - [1248, 720]
+  camera:
+    tolerance: 0.15            # a reversal beyond detector noise; how far the framing moves isn't checked
+    suffix:
+      closer: " Framed at least as close as Picture 1: the face is as large as in Picture 1 or larger."
+      wider: " Framed wider than Picture 1: the face is smaller than in Picture 1."
+      steady: " The same framing as Picture 1: the face is the same size as in Picture 1."
+    # used instead of end_keyframe.prompt_template when the start keyframe was re-framed for a small face
+    reframed_template: >-
+      Picture 1 a few seconds later: {end} Framing: ignore any shot size named in that description; frame it
+      relative to Picture 1 instead.{camera} Keep the same location, camera angle, lighting and outfit as
+      Picture 1, and the same face as Picture 2. Cinematic 16:9 still.
